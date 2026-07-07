@@ -38,7 +38,136 @@ warning:(Private project not for public use )
 
 ## 📦 **ইন্সটলেশন ও রান করার গাইড**
 
-### ১. রেপো ক্লোন করুন
-```bash
+📦 স্টেপ 1: Python ইনস্টল করা (যদি না থাকে)
+Python ডাউনলোড করুন:
+https://www.python.org/downloads/
+
+সুপারিশ: Python 3.10 বা 3.11 (স্থিতিশীল)
+
+ইন্সটল করার সময় → "Add Python to PATH" চেকবক্স টিক দিতে ভুলবেন না!
+
+ইন্সটল শেষ হয়ে গেলে, CMD খুলে টাইপ করুন:
+
+cmd
+python --version
+আউটপুট: Python 3.10.x (এরকম কিছু দেখালেই বুঝবেন কাজ করছে)
+
+📂 স্টেপ 2: প্রোজেক্ট ডাউনলোড করা
+পদ্ধতি ১: GitHub থেকে ক্লোন (সবচেয়ে ভালো)
+
+cmd
 git clone https://github.com/carrerpath20-sys/Project-Zero.git
 cd Project-Zero
+পদ্ধতি ২: ZIP ডাউনলোড
+
+রিপোজিটরিতে গিয়ে "Code" → "Download ZIP" ক্লিক করুন।
+
+ZIP ফাইল এক্সট্র্যাক্ট করুন এবং CMD-তে সেই ফোল্ডারে যান:
+
+cmd
+cd C:\path\to\Project-Zero-main
+📄 স্টেপ 3: ডিপেন্ডেন্সি ইনস্টল করা
+প্রোজেক্ট ফোল্ডারের ভেতরে (main.py যেখানে আছে) এই কমান্ড দিন:
+
+cmd
+pip install -r requirements.txt
+যদি কোনো এরর আসে (যেমন: PyPDF2 না পাওয়া), তাহলে আলাদাভাবে ইনস্টল করুন:
+
+cmd
+pip install PyPDF2 openpyxl python-docx
+সব ঠিক থাকলে, এটি ২০-৩০টি লাইব্রেরি ডাউনলোড করবে। ইন্টারনেটের গতি অনুযায়ী ১-২ মিনিট সময় নেবে।
+
+📂 4. ফাইল ও ফোল্ডার স্ট্রাকচার (কী কোথায়?)
+প্রথমে জেনে নিন আপনার প্রোজেক্টের ভেতরের জিনিসগুলো কী কাজে লাগে:
+
+ফাইল/ফোল্ডার	অবস্থান	কাজ
+main.py	রুট ফোল্ডারে	এন্ট্রি পয়েন্ট — এই ফাইলটি রান করতে হবে।
+config.yaml	রুট ফোল্ডারে	সব কনফিগ — API Keys, মডেল, লিমিট, ফেজ সেটিংস।
+.env	রুট ফোল্ডারে	API Keys — (আপনি চাইলে config-এও বসাতে পারেন, তবে .env নিরাপদ)।
+requirements.txt	রুট ফোল্ডারে	ডিপেন্ডেন্সি লিস্ট — pip install করতে হবে।
+supervisor/	রুট ফোল্ডারে	কোর ব্রেইন — অর্কেস্ট্রেটর, রাউটার, হেলথ মনিটর।
+agents/	রুট ফোল্ডারে	সাব-এজেন্ট ও রিকন ফেজ — ১৫টি ফেজ এখানে আছে।
+tools/	রুট ফোল্ডারে	ইউটিলিটি — HTTP ক্লায়েন্ট, ডিএনএস রেজলভার, ইন্সটলার।
+state/	রুট ফোল্ডারে	মেমোরি — সেশন, চেকপয়েন্ট, ইভোলিউশন লগ।
+outputs/	(রান করার পর তৈরি হবে)	রিপোর্ট ও লগ — সব রেজাল্ট এখানে জমা হবে।
+🖥️ ২. CMD ওপেন করে প্রথম সেটআপ (শুধু প্রথমবার)
+আপনার রিপোজিটরি ক্লোন করার পর এই ধাপগুলো করুন:
+
+cmd
+# ১. প্রোজেক্ট ফোল্ডারে যান (যেখানে main.py আছে)
+cd C:\Users\YourUsername\Project-Zero
+
+# ২. Python ভার্সন চেক করুন (৩.৮+ হতে হবে)
+python --version
+
+# ৩. pip আপগ্রেড করুন
+python -m pip install --upgrade pip
+
+# ৪. সব ডিপেন্ডেন্সি ইনস্টল করুন
+pip install -r requirements.txt
+যদি কোনো এরর আসে (যেমন: PyPDF2), তাহলে আলাদাভাবে ইনস্টল করুন:
+
+cmd
+pip install PyPDF2 openpyxl python-docx
+⚡ ৩. CMD থেকে রান করার কমান্ড (বিভিন্ন উদাহরণ)
+ক. বেসিক স্ক্যান (সবচেয়ে সহজ)
+cmd
+python main.py example.com
+👉 এটি example.com-এর জন্য ডিফল্ট ফেজ (১-১৫) রান করবে।
+
+খ. ভার্বোস মোড (লাইভ লগ দেখতে)
+cmd
+python main.py example.com --verbose
+👉 স্ক্যান চলাকালীন প্রতিটি ধাপের লাইভ আপডেট দেখাবে (ডিবাগের জন্য দরকারী)।
+
+গ. শুধু নির্দিষ্ট ফেজ চালানো (দ্রুত টেস্ট)
+cmd
+python main.py example.com --phases 1,2,3,4,5
+👉 শুধু ফেজ ১-৫ চালাবে (বাকি ফেজ স্কিপ করবে)। আপনি কমা দিয়ে যেকোনো ফেজ সিলেক্ট করতে পারেন (যেমন: 1,5,10)
+
+ঘ. সব ১৫টি ফেজ চালানো
+cmd
+python main.py example.com --all
+👉 এটি --phases 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15-এর শর্টকাট।
+
+ঙ. অটো-ইন্সটল সহ রান করা
+cmd
+python main.py example.com --auto-install
+👉 যদি আপনার সিস্টেমে massdns বা subfinder ইনস্টল না থাকে, তাহলে এটি GitHub থেকে অটো ডাউনলোড করবে (অথবা Python ফ্যালব্যাক ব্যবহার করবে)।
+
+চ. সব অপশন একসাথে (পাওয়ারফুল মোড)
+cmd
+python main.py example.com --all --verbose --auto-install
+
+
+🗂️ 5. আউটপুট কোথায় পাবেন? (ফলাফল দেখুন)
+স্ক্যান শেষ হওয়ার পর, আপনার প্রোজেক্ট ফোল্ডারের ভেতরে outputs/ ফোল্ডার তৈরি হবে। সেখানে:
+
+ফাইল/ফোল্ডার	পাথ	কী আছে?
+লগ ফাইল	outputs/logs/zero_recon_*.log	পুরো স্ক্যানের বিস্তারিত লগ (ক্র্যাশ ডিবাগের জন্য)
+JSON রিপোর্ট	outputs/reports/report_*.json	সব ডাটা মেশিন-রিডেবল JSON ফরম্যাটে
+HTML রিপোর্ট	outputs/reports/report_*.html	ব্রাউজারে খুলে দেখার মতো প্রফেশনাল ড্যাশবোর্ড
+Markdown রিপোর্ট	outputs/reports/report_*.md	মার্কডাউন ফরম্যাটে (GitHub-এ ভালো দেখায়)
+ফেজ ডাটা	outputs/phase_data/phase_*.json	প্রতিটি ফেজের কাঁচা ডাটা (ডিবাগের জন্য)
+
+🛠️ 6. কনফিগ ফাইল (config.yaml) কোথায় ও কী পরিবর্তন করবেন?
+পাথ: Project-Zero/config.yaml
+
+কী পরিবর্তন করবেন:
+
+API Keys: (যদি .env কাজ না করে) এখানে বসান।
+
+scan: → timeout, retries, max_threads পরিবর্তন করুন (ইন্টারনেট স্পিড অনুযায়ী)।
+
+phases: → enabled লিস্ট থেকে কোনো ফেজ বাদ দিতে পারেন।
+
+⚠️ 7. সাধারণ সমস্যা ও সমাধান
+সমস্যা	সমাধান
+ModuleNotFoundError: No module named 'yaml'	pip install pyyaml রান করুন
+ImportError: No module named 'supervisor'	আপনি কি Project-Zero ফোল্ডারের ভেতরে আছেন? (cd করে দেখুন)
+Cerebras API key invalid	config.yaml বা .env-এ কী ঠিকমতো বসানো আছে কিনা চেক করুন
+স্ক্যান খুব ধীরে চলছে	config.yaml-এ max_threads: 10 বা 20 করে দিন (নেটওয়ার্ক স্পিড অনুযায়ী)
+MassDNS not found	চিন্তা নেই, ফ্রেমওয়ার্ক নিজেই Python ফ্যালব্যাক ব্যবহার করবে (ধীরে হলেও কাজ করবে)
+
+💡 প্রো টিপস (এক্সপার্টদের জন্য)
+রাতভর স্ক্যান করতে চাইলে: python main.py example.com --all > scan_log.txt (আউটপুট ফাইলে সেভ করবে)।
