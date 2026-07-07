@@ -1,0 +1,49 @@
+# ============================================================
+# ZERO RECON FRAMEWORK — COMPLETE DEPENDENCIES
+# ============================================================
+
+# Core
+pyyaml>=6.0
+requests>=2.31.0
+colorama>=0.4.6
+tqdm>=4.65.0
+
+# Networking & DNS
+dnspython>=2.4.0
+
+# SSL & Crypto
+cryptography>=41.0.0
+pyOpenSSL>=23.0.0
+
+# HTTP Stealth
+fake-useragent>=1.4.0
+
+# System Monitoring (Windows)
+psutil>=5.9.0
+
+# File Locking (Windows-safe)
+portalocker>=2.8.0
+
+# Cloud SDKs (optional, for cloud scanner)
+boto3>=1.28.0
+google-cloud-storage>=2.10.0
+azure-storage-blob>=12.18.0
+
+# ASN & IP
+ipwhois>=1.2.0
+
+# Historical Data
+waybackpy>=3.0.6
+
+# GitHub
+PyGithub>=2.1.0
+
+# Token counting
+tiktoken>=0.5.0
+
+# ============================================================
+# METADATA EXTRACTION (Phase 14 - Supply Chain)
+# ============================================================
+PyPDF2>=3.0.0
+openpyxl>=3.1.0
+python-docx>=1.0.0
