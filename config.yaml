@@ -1,0 +1,129 @@
+# ============================================================
+#  ZERO RECON FRAMEWORK — MASTER CONFIGURATION
+#  (c) 2026 Zero Labs — Offensive Security Research
+# ============================================================
+
+framework:
+  name: "Zero Recon"
+  version: "1.0.0"
+  author: "Zero Labs"
+
+# ------------------------------------------------------------
+#  AI প্রোভাইডার কনফিগ (আপনার দেওয়া Keys বসানো হলো)
+# ------------------------------------------------------------
+ai:
+  cerebras:
+    enabled: true
+    api_key: "csk-j8vjk2e46ww2xn3txkrc6fyc365mjrxc4c5w5xjwrw59fwtf"
+    base_url: "https://api.cerebras.ai/v1/chat/completions"
+    models:
+      high: "gpt-oss-120b"
+      medium: "gemma-4-31b"
+      low: "zai-glm-4.7"
+    limits:
+      max_rpm: 5
+      max_rpd: 2400
+    timeout: 30
+
+  openrouter:
+    enabled: true
+    api_key: "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"
+    base_url: "https://openrouter.ai/api/v1/chat/completions"
+    fallback_models:
+      high: "nvidia/nemotron-3-ultra"
+      medium: "poolside/laguna-m.1"
+      low: "openai/gpt-oss-20b"
+    limits:
+      max_rpd: 50
+    timeout: 30
+
+# ------------------------------------------------------------
+#  স্ক্যানিং প্যারামিটার
+# ------------------------------------------------------------
+scan:
+  ports:
+    - 80
+    - 443
+    - 8080
+    - 8443
+    - 465
+    - 993
+  timeout: 10
+  retries: 5
+  delay_between_requests: 1.5
+  max_threads: 5
+  max_subdomains_to_scan: 100
+
+# ------------------------------------------------------------
+#  OPSEC (স্টেলথ) সেটিংস
+# ------------------------------------------------------------
+opsec:
+  user_agent_rotation: true
+  random_delay: true
+  delay_min: 1.0
+  delay_max: 3.0
+  proxy_enabled: false
+  proxy_list: []
+  ip_masking: true
+
+# ------------------------------------------------------------
+#  অটো-ইনস্টল ও ডিপেন্ডেন্সি
+# ------------------------------------------------------------
+auto_install: true
+python_fallbacks:
+  massdns: true
+  subfinder: true
+  waybackpy: true
+
+# ------------------------------------------------------------
+#  অটো-আপডেট (GitHub ইন্টিগ্রেশন)
+# ------------------------------------------------------------
+auto_update:
+  enabled: true
+  repo_url: "https://github.com/carrerpath20-sys/Project-Zero"
+  branch: "main"
+  check_interval_hours: 6
+  auto_install_deps: true
+  github_token: ""
+
+# ------------------------------------------------------------
+#  ডিরেক্টরি পাথ
+# ------------------------------------------------------------
+output_dir: "outputs"
+state_dir: "state"
+logs_dir: "outputs/logs"
+reports_dir: "outputs/reports"
+cache_dir: "state/cache"
+checkpoint_dir: "state/checkpoint"
+
+# ------------------------------------------------------------
+#  সুপারভাইজার ফ্লো কন্ট্রোল
+# ------------------------------------------------------------
+supervisor:
+  max_iterations: 100
+  loop_delay: 5
+  enable_health_monitor: true
+  enable_auto_updater: true
+  github_repo: "https://github.com/carrerpath20-sys/Project-Zero"
+
+# ------------------------------------------------------------
+#  ফেজ কনফিগ (কোন ফেজ চালাবে)
+# ------------------------------------------------------------
+phases:
+  enabled:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    - 12
+    - 13
+    - 14
+    - 15
+  skip: []
