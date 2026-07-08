@@ -1,30 +1,36 @@
 # ============================================================
-#  ZERO RECON FRAMEWORK — MASTER CONFIGURATION
+#  🔥 ZERO RECON FRAMEWORK — MASTER CONFIGURATION v2.0
 #  (c) 2026 Zero Labs — Offensive Security Research
+#  হ্যাকার-রেডি ভার্সন — সম্পূর্ণ নতুন ফিচার সহ
 # ============================================================
 
 framework:
   name: "Zero Recon"
-  version: "1.0.0"
+  version: "2.0.0"
   author: "Zero Labs"
+  description: "AI-driven Recon Framework for Windows & Linux"
 
 # ------------------------------------------------------------
-#  AI প্রোভাইডার কনফিগ (আপনার দেওয়া Keys বসানো হলো)
+#  🤖 এআই প্রোভাইডার কনফিগ (হাইব্রিড মোড + ফ্যালব্যাক)
 # ------------------------------------------------------------
 ai:
+  # Cerebras — Primary (দ্রুত, ফ্রি, ৫ RPM, ২৪০০ RPD)
   cerebras:
     enabled: true
     api_key: "csk-j8vjk2e46ww2xn3txkrc6fyc365mjrxc4c5w5xjwrw59fwtf"
     base_url: "https://api.cerebras.ai/v1/chat/completions"
     models:
-      high: "gpt-oss-120b"
-      medium: "gemma-4-31b"
-      low: "zai-glm-4.7"
+      high: "gpt-oss-120b"          # জটিল রিজনিং (সুপারভাইজার, হিলার)
+      medium: "gemma-4-31b"         # ব্যালেন্সড (এক্সিকিউটর, ম্যাপার)
+      low: "zai-glm-4.7"            # দ্রুত (ভ্যালিডেটর, ফরম্যাটিং)
     limits:
-      max_rpm: 5
-      max_rpd: 2400
-    timeout: 30
+      max_rpm: 5                    # প্রতি মিনিটে ৫টি রিকোয়েস্ট
+      max_rpd: 2400                 # প্রতিদিন ২৪০০টি রিকোয়েস্ট
+    timeout: 45                     # API রেসপন্সের জন্য ৪৫ সেকেন্ড
+    retry_on_429: true              # রেট লিমিট পেলে অটো রিট্রাই
+    retry_delay: 60                 # ৪২৯ পেলে ৬০ সেকেন্ড অপেক্ষা
 
+  # OpenRouter — Fallback (যখন Cerebras লিমিটে আঘাত করে)
   openrouter:
     enabled: true
     api_key: "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"
@@ -34,13 +40,33 @@ ai:
       medium: "poolside/laguna-m.1"
       low: "openai/gpt-oss-20b"
     limits:
-      max_rpd: 50
+      max_rpd: 50                   # প্রতিদিন ৫০টি ফ্রি রিকোয়েস্ট
     timeout: 30
+    retry_on_402: true              # ক্রেডিট ফুরালে অপেক্ষা করবে
+
+  # 🆕 হিউম্যান-লাইক ডিসিশন মেকিং (প্যাশেন্ট মোড)
+  decision_making:
+    wait_for_ai_response: true      # AI রেসপন্স আসা পর্যন্ত অপেক্ষা করবে
+    max_wait_minutes: 15            # সর্বোচ্চ ১৫ মিনিট অপেক্ষা (তারপর স্কিপ)
+    fallback_to_cache: true         # AI ব্যর্থ হলে ক্যাশে থাকা উত্তর ব্যবহার করবে
 
 # ------------------------------------------------------------
-#  স্ক্যানিং প্যারামিটার
+#  🕵️ স্ক্যানিং প্যারামিটার (প্যাশেন্ট + অ্যাগ্রেসিভ)
 # ------------------------------------------------------------
 scan:
+  # -- টাইমআউট ও রিট্রাই (ধৈর্য ধরে কাজ করবে) --
+  timeout: 180                     # প্রতিটি HTTP/DNS রিকোয়েস্টে ৩ মিনিট সময়
+  retries: 20                      # সর্বোচ্চ ২০ বার চেষ্টা (প্রায় ১ ঘন্টা)
+  max_wait_minutes: 15             # প্রতিটি ফেজের জন্য ১৫ মিনিট অপেক্ষা
+  
+  # -- রেট লিমিট ও ডিটেকশন এভয়েড --
+  delay_between_requests: 8.0      # প্রতিটি রিকোয়েস্টের মাঝে ৮ সেকেন্ড গ্যাপ
+  max_threads: 1                   # মাত্র ১টি থ্রেড (রেট লিমিট এড়াতে)
+  jitter: true                     # র্যান্ডম ডিলে যোগ করো (WAF বাইপাস)
+  jitter_min: 6                    # সর্বনিম্ন ৬ সেকেন্ড
+  jitter_max: 12                   # সর্বোচ্চ ১২ সেকেন্ড
+
+  # -- টার্গেট সিলেকশন --
   ports:
     - 80
     - 443
@@ -48,35 +74,50 @@ scan:
     - 8443
     - 465
     - 993
-  timeout: 10
-  retries: 5
-  delay_between_requests: 1.5
-  max_threads: 5
-  max_subdomains_to_scan: 100
+    - 22                          # SSH
+    - 21                          # FTP
+    - 25                          # SMTP
+    - 53                          # DNS
+    - 110                         # POP3
+    - 143                         # IMAP
+    - 3306                        # MySQL
+    - 3389                        # RDP
+    - 5432                        # PostgreSQL
+    - 6379                        # Redis
+    - 27017                       # MongoDB
+  max_subdomains_to_scan: 500     # সর্বোচ্চ ৫০০ সাবডোমেইন প্রসেস করবে
 
 # ------------------------------------------------------------
-#  OPSEC (স্টেলথ) সেটিংস
+#  🛡️ OPSEC ও স্টেলথ সেটিংস (শনাক্ত হওয়া থেকে বাঁচতে)
 # ------------------------------------------------------------
 opsec:
-  user_agent_rotation: true
-  random_delay: true
-  delay_min: 1.0
-  delay_max: 3.0
-  proxy_enabled: false
-  proxy_list: []
-  ip_masking: true
+  # -- HTTP স্টেলথ --
+  user_agent_rotation: true       # প্রতিটি রিকোয়েস্টে ইউজার-এজেন্ট পরিবর্তন করো
+  random_delay: true              # র্যান্ডম ডিলে যোগ করো
+  delay_min: 5.0                  # সর্বনিম্ন ৫ সেকেন্ড
+  delay_max: 15.0                 # সর্বোচ্চ ১৫ সেকেন্ড
+  
+  # -- প্রক্সি সাপোর্ট (TOR/VPN) --
+  proxy_enabled: false            # প্রক্সি ব্যবহার করবে?
+  proxy_list: []                  # প্রক্সি লিস্ট (যেমন: ["socks5://127.0.0.1:9050"])
+  proxy_rotation: "round-robin"   # প্রক্সি রোটেশন পদ্ধতি (round-robin / random)
+  
+  # -- IP ও ডোমেইন মাস্কিং --
+  ip_masking: true                # লগে IP-র শেষ অক্টেট মাস্ক করো (যেমন: 192.168.1.xxx)
+  domain_masking: false           # ডোমেইনের অংশ লুকাবে (যেমন: e*****e.com)
 
 # ------------------------------------------------------------
-#  অটো-ইনস্টল ও ডিপেন্ডেন্সি
+#  🔧 অটো-ইন্সটল ও ডিপেন্ডেন্সি (স্বয়ংক্রিয় সেটআপ)
 # ------------------------------------------------------------
 auto_install: true
 python_fallbacks:
-  massdns: true
-  subfinder: true
-  waybackpy: true
+  massdns: true                   # MassDNS না থাকলে Python ফ্যালব্যাক
+  subfinder: true                 # Subfinder না থাকলে crt.sh API
+  waybackpy: true                 # Waybackpy না থাকলে requests দিয়ে ফেচ
+  nmap: false                     # Nmap না থাকলে socket দিয়ে স্ক্যান
 
 # ------------------------------------------------------------
-#  অটো-আপডেট (GitHub ইন্টিগ্রেশন)
+#  📦 অটো-আপডেট (GitHub ইন্টিগ্রেশন)
 # ------------------------------------------------------------
 auto_update:
   enabled: true
@@ -85,9 +126,13 @@ auto_update:
   check_interval_hours: 6
   auto_install_deps: true
   github_token: ""
+  # 🆕 নিরাপত্তা: শুধু অনুমোদিত কমিটই টেনে আনবে
+  allowed_commit_authors:
+    - "carrerpath20-sys"
+    - "Zero-Labs"
 
 # ------------------------------------------------------------
-#  ডিরেক্টরি পাথ
+#  🗃️ ডিরেক্টরি পাথ (ফাইল স্টোরেজ)
 # ------------------------------------------------------------
 output_dir: "outputs"
 state_dir: "state"
@@ -95,35 +140,100 @@ logs_dir: "outputs/logs"
 reports_dir: "outputs/reports"
 cache_dir: "state/cache"
 checkpoint_dir: "state/checkpoint"
+snapshot_dir: "state/snapshots"
 
 # ------------------------------------------------------------
-#  সুপারভাইজার ফ্লো কন্ট্রোল
+#  🧠 সুপারভাইজার ফ্লো কন্ট্রোল
 # ------------------------------------------------------------
 supervisor:
-  max_iterations: 100
-  loop_delay: 5
-  enable_health_monitor: true
-  enable_auto_updater: true
-  github_repo: "https://github.com/carrerpath20-sys/Project-Zero"
+  max_iterations: 200             # সর্বোচ্চ ২০০টি লুপ
+  loop_delay: 5                   # প্রতিটি লুপের মাঝে ৫ সেকেন্ড গ্যাপ
+  enable_health_monitor: true     # মেমোরি/সিপিইউ মনিটর চালু রাখো
+  enable_auto_updater: true       # GitHub আপডেট চেকার চালু রাখো
+  enable_checkpoint: true         # ক্র্যাশ হলে চেকপয়েন্ট থেকে শুরু করো
+  enable_rollback: true           # ক্র্যাশ হলে আগের ভার্সনে ফিরে যাও
 
 # ------------------------------------------------------------
-#  ফেজ কনফিগ (কোন ফেজ চালাবে)
+#  🧬 ফেজ কনফিগ (কোন ফেজ চালাবে, কোনটি স্কিপ করবে)
 # ------------------------------------------------------------
 phases:
+  # -- সক্রিয় ফেজ --
   enabled:
-    - 1
-    - 2
-    - 3
-    - 4
-    - 5
-    - 6
-    - 7
-    - 8
-    - 9
-    - 10
-    - 11
-    - 12
-    - 13
-    - 14
-    - 15
-  skip: []
+    - 1   # CT Log + Subdomain
+    - 2   # ASN + Origin IP
+    - 3   # GitHub Recon
+    - 4   # Wayback + JS Parsing
+    - 5   # Cloud Buckets (S3/GCS/Azure)
+    - 6   # DNS Permutation
+    - 7   # ASN Mapping
+    - 8   # MassDNS Bruteforce
+    - 9   # OSINT Pipeline
+    - 10  # Vulnerability (Takeover, CORS, Ports)
+    - 11  # Attack Surface Summary
+    - 12  # Report Generation
+    - 13  # Infrastructure Inference
+    - 14  # Supply Chain + Metadata
+    - 15  # Continuous Diff Recon
+
+  # -- স্কিপ ফেজ (যদি কোনো ফেজ দরকার না হয়) --
+  skip: []                       # যেমন: [3, 5] দিলে ফেজ ৩ ও ৫ স্কিপ করবে
+
+  # -- ফেজ-নির্ভর টাইমআউট (প্রতিটি ফেজের জন্য আলাদা) --
+  custom_timeouts:
+    1: 300                       # ফেজ ১-এর জন্য ৫ মিনিট (crt.sh ধীরে কাজ করে)
+    4: 300                       # ফেজ ৪-এর জন্য ৫ মিনিট (Wayback ধীর)
+    8: 120                       # ফেজ ৮-এর জন্য ২ মিনিট (MassDNS দ্রুত)
+
+# ------------------------------------------------------------
+#  🆕 হ্যাকার-রেডি এক্সট্রা ফিচার (নতুন যোগ করা হলো)
+# ------------------------------------------------------------
+extra_features:
+  # -- AI-চালিত সাবডোমেইন প্রেডিকশন (প্যাটার্ন লার্নিং) --
+  predictive_permutation:
+    enabled: true
+    max_predictions: 50
+    pattern_learning: true       # আগের সাবডোমেইন থেকে প্যাটার্ন শিখবে
+
+  # -- ইন্টেলিজেন্ট পোর্ট স্ক্যান (শুধু অরিজিন IP-তে) --
+  smart_port_scan:
+    enabled: true
+    skip_cloudflare_edges: true  # Cloudflare IP-তে পোর্ট স্ক্যান করবে না
+    scan_origins_only: true      # শুধু Phase 2-র অরিজিন IP-তে স্ক্যান করবে
+
+  # -- ডিফারেন্সিয়াল স্ক্যান (Diff Recon) --
+  diff_scan:
+    enabled: true
+    snapshot_interval_hours: 24  # ২৪ ঘন্টা পরপর স্ন্যাপশট নেবে
+    alert_on_change: true        # পরিবর্তন পেলে লগে অ্যালার্ট দেবে
+
+  # -- মেটাডেটা হার্ভেস্টার (PDF/DOCX/XLSX) --
+  metadata_harvester:
+    enabled: true
+    max_file_size_mb: 5          # সর্বোচ্চ ৫MB ফাইল ডাউনলোড করবে
+    extract_author: true         # লেখকের নাম বের করবে
+    extract_software: true       # সফটওয়্যার ভার্সন বের করবে
+
+  # -- সাপ্লাই চেইন ডিটেকশন (Vercel, Supabase, Shopify) --
+  supply_chain_detection:
+    enabled: true
+    check_cname: true            # CNAME রেকর্ড চেক করবে
+    check_txt: true              # TXT/SPF রেকর্ড চেক করবে
+    dangling_timeout: 30         # ড্যাংলিং চেকের জন্য ৩০ সেকেন্ড
+
+  # -- ক্র্যাশ রিকভারি (Self-Healing) --
+  self_healing:
+    enabled: true
+    max_healing_attempts: 3      # সর্বোচ্চ ৩ বার চেষ্টা
+    fallback_to_previous: true   # ব্যর্থ হলে আগের ভার্সনে ফিরে যাও
+    notify_on_heal: true         # হিলিং হলে লগে জানাবে
+
+# ------------------------------------------------------------
+#  📊 লগিং ও মনিটরিং
+# ------------------------------------------------------------
+logging:
+  level: "INFO"                  # DEBUG, INFO, WARNING, ERROR
+  console_output: true           # টার্মিনালে দেখাবে
+  file_output: true              # ফাইলে সেভ করবে
+  max_log_size_mb: 10            # ১০MB হলে নতুন ফাইল তৈরি করবে
+  log_rotation: true             # পুরনো লগ রোটেট করবে
+  mask_sensitive: true           # API Key/Token লগে লুকাবে
