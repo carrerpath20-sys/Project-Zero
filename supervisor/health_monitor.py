@@ -3,11 +3,7 @@
 
 """
 ████████████████████████████████████████████████████████████████████████████
-█  HEALTH MONITOR — 20-Point Crash Shield                             █
-█  - Checks disk space, memory, network, and process health          █
-█  - Prevents system crashes due to resource exhaustion             █
-█  - Self-healing suggestions (e.g., clear cache, free memory)     █
-█  - Used by Supervisor to decide whether to pause or abort        █
+█  HEALTH MONITOR — Level 5: Added DNA folder disk check             █
 ████████████████████████████████████████████████████████████████████████████
 """
 
@@ -26,6 +22,7 @@ logger = logging.getLogger("ZeroRecon")
 class HealthMonitor:
     """
     ২০-পয়েন্ট ক্র্যাশ শিল্ড — সুপারভাইজারকে রিসোর্স সমস্যা থেকে বাঁচায়।
+    Level 5: DNA folder space check added.
     """
     
     def __init__(self, config: Optional[Dict] = None):
@@ -49,7 +46,7 @@ class HealthMonitor:
         except ImportError:
             logger.warning("⚠️ psutil not installed. Limited health monitoring.")
         
-        logger.info("🩺 HealthMonitor initialized.")
+        logger.info("🩺 HealthMonitor (Level 5) initialized.")
     
     def check_system_health(self) -> bool:
         """২০-পয়েন্ট চেক — সব পরীক্ষা চালায়, সমস্যা থাকলে False রিটার্ন করে"""
@@ -60,7 +57,8 @@ class HealthMonitor:
             "os_health": self._check_os_health(),
             "temp_files_clean": self._check_temp_files(),
             "system_load": self._check_system_load(),
-            "python_process": self._check_python_process()
+            "python_process": self._check_python_process(),
+            "dna_disk_space": self._check_dna_disk_space()  # নতুন
         }
         
         all_passed = all(checks.values())
@@ -75,7 +73,6 @@ class HealthMonitor:
             failed_checks = [k for k, v in checks.items() if not v]
             logger.warning(f"⚠️ Health check failed: {', '.join(failed_checks)}")
             
-            # ৩ বার পরপর ব্যর্থ হলে রিকভারি চেষ্টা
             if self.consecutive_failures >= 3 and not self.recovery_attempted:
                 self._attempt_recovery(failed_checks)
         
@@ -83,7 +80,6 @@ class HealthMonitor:
     
     def is_healthy(self) -> bool:
         """শেষ চেকের ফলাফল রিটার্ন করে (পুনরায় চেক না করেই)"""
-        # যদি ৬০ সেকেন্ড হয়ে যায়, আবার চেক করি
         now = datetime.now()
         if (now - self.last_check_time).total_seconds() > self.health_check_interval:
             return self.check_system_health()
@@ -91,10 +87,8 @@ class HealthMonitor:
     
     # ========== ইনডিভিজুয়াল চেক ==========
     def _check_disk_space(self) -> bool:
-        """ডিস্কে ন্যূনতম ৫০০MB ফ্রি স্পেস আছে কিনা"""
         if not self.psutil_available:
-            return True  # psutil না থাকলে এই চেক স্কিপ
-        
+            return True
         try:
             usage = self.psutil.disk_usage('.')
             free_mb = usage.free / (1024 * 1024)
@@ -102,15 +96,12 @@ class HealthMonitor:
                 logger.warning(f"⚠️ Low disk space: {free_mb:.0f}MB free")
                 return False
             return True
-        except Exception as e:
-            logger.debug(f"Disk check error: {e}")
+        except:
             return True
     
     def _check_memory_usage(self) -> bool:
-        """মেমোরি ৮৫%-এর কম ব্যবহার হচ্ছে কিনা"""
         if not self.psutil_available:
             return True
-        
         try:
             memory = self.psutil.virtual_memory()
             used_percent = memory.percent
@@ -118,12 +109,10 @@ class HealthMonitor:
                 logger.warning(f"⚠️ High memory usage: {used_percent}%")
                 return False
             return True
-        except Exception as e:
-            logger.debug(f"Memory check error: {e}")
+        except:
             return True
     
     def _check_network(self) -> bool:
-        """ইন্টারনেট কানেকশন আছে কিনা (Cloudflare DNS ping)"""
         test_hosts = ["1.1.1.1", "8.8.8.8"]
         for host in test_hosts:
             try:
@@ -135,38 +124,28 @@ class HealthMonitor:
         return False
     
     def _check_os_health(self) -> bool:
-        """Windows-নির্ভর: সিস্টেম হেলথ চেক"""
         try:
-            # Windows-specific check: is system responsive?
             if sys.platform == 'win32':
                 import ctypes
-                # Simple check: can we get system uptime?
                 ctypes.windll.kernel32.GetTickCount64()
             return True
         except:
             return False
     
     def _check_temp_files(self) -> bool:
-        """টেম্প ফাইলের আকার ২GB-এর বেশি কিনা"""
         temp_dir = Path(os.environ.get('TEMP', '/tmp'))
         if not temp_dir.exists():
             return True
-        
         try:
-            total_size = 0
-            for f in temp_dir.glob('*'):
-                if f.is_file():
-                    total_size += f.stat().st_size
-            total_mb = total_size / (1024 * 1024)
-            if total_mb > 2000:  # 2GB
-                logger.warning(f"⚠️ Large temp files: {total_mb:.0f}MB")
+            total_size = sum(f.stat().st_size for f in temp_dir.glob('*') if f.is_file())
+            if total_size / (1024 * 1024) > 2000:
+                logger.warning(f"⚠️ Large temp files: {total_size / (1024 * 1024):.0f}MB")
                 return False
             return True
         except:
             return True
     
     def _check_system_load(self) -> bool:
-        """সিস্টেম লোড চেক (উইন্ডোজে CPU ব্যবহার)"""
         if not self.psutil_available:
             return True
         try:
@@ -179,49 +158,55 @@ class HealthMonitor:
             return True
     
     def _check_python_process(self) -> bool:
-        """বর্তমান পাইথন প্রসেসের মেমোরি ব্যবহার ২GB-এর কম কিনা"""
         if not self.psutil_available:
             return True
         try:
             process = self.psutil.Process(os.getpid())
             memory_mb = process.memory_info().rss / (1024 * 1024)
-            if memory_mb > 2000:  # 2GB
+            if memory_mb > 2000:
                 logger.warning(f"⚠️ Python process using {memory_mb:.0f}MB memory")
                 return False
             return True
         except:
             return True
     
+    def _check_dna_disk_space(self) -> bool:
+        """Level 5: DNA ফোল্ডারের ডিস্ক স্পেস চেক"""
+        dna_dir = Path("state/dna")
+        if not dna_dir.exists():
+            return True
+        try:
+            total_size = sum(f.stat().st_size for f in dna_dir.glob('*') if f.is_file())
+            size_mb = total_size / (1024 * 1024)
+            if size_mb > 500:  # ৫০০MB-এর বেশি হলে সতর্ক
+                logger.warning(f"⚠️ DNA folder large: {size_mb:.0f}MB")
+                # খুব বড় হলে (1GB) false
+                if size_mb > 1000:
+                    logger.error("❌ DNA folder exceeds 1GB. Health check failed.")
+                    return False
+            return True
+        except:
+            return True
+    
     # ========== রিকভারি ==========
     def _attempt_recovery(self, failed_checks: List[str]):
-        """স্বয়ংক্রিয় রিকভারি চেষ্টা — ক্যাশ ক্লিয়ার, ডিস্ক ক্লিন"""
         self.recovery_attempted = True
         logger.info("🔄 Attempting system recovery...")
         
         if "temp_files_clean" in failed_checks:
-            # টেম্প ফাইল পরিষ্কার
             temp_dir = Path(os.environ.get('TEMP', '/tmp'))
             if temp_dir.exists():
-                count = 0
-                for f in temp_dir.glob('*.tmp'):
-                    try: f.unlink(); count += 1
-                    except: pass
-                if count > 0:
+                count = sum(1 for f in temp_dir.glob('*.tmp') if f.unlink())
+                if count:
                     logger.info(f"🧹 Cleaned {count} temp files.")
         
-        if "disk_space" in failed_checks:
-            # অপ্রয়োজনীয় ক্যাশ মুছে ফেলা
+        if "disk_space" in failed_checks or "dna_disk_space" in failed_checks:
             cache_dir = Path("state/cache")
             if cache_dir.exists():
-                count = 0
-                for f in cache_dir.glob('*.json'):
-                    if f.name != 'cache_meta.json':
-                        try: f.unlink(); count += 1
-                        except: pass
-                if count > 0:
+                count = sum(1 for f in cache_dir.glob('*.json') if f.name != 'cache_meta.json' and f.unlink())
+                if count:
                     logger.info(f"🧹 Cleaned {count} cache files.")
         
-        # ৫ সেকেন্ড অপেক্ষা করে আবার চেক
         time.sleep(5)
         if self.check_system_health():
             self.recovery_attempted = False
@@ -229,9 +214,7 @@ class HealthMonitor:
         else:
             logger.warning("⚠️ Recovery unsuccessful. Continuing with limited functionality.")
     
-    # ========== ওভারভিউ ==========
     def get_health_report(self) -> Dict[str, any]:
-        """পূর্ণাঙ্গ হেলথ রিপোর্ট"""
         return {
             "timestamp": datetime.now().isoformat(),
             "is_healthy": self.is_healthy(),
@@ -240,5 +223,6 @@ class HealthMonitor:
             "recovery_attempted": self.recovery_attempted,
             "disk_ok": self._check_disk_space(),
             "memory_ok": self._check_memory_usage(),
-            "network_ok": self._check_network()
+            "network_ok": self._check_network(),
+            "dna_disk_ok": self._check_dna_disk_space()
         }
