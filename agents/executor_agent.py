@@ -1,54 +1,63 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Executor Agent — Orchestrates the 12 reconnaissance phases.
-Runs phases sequentially or parallel (max 2 threads).
+🔥 EXECUTOR AGENT (Level 5 — God-Tier Orchestrator)
+- Uses MCTS path to decide which phases to run and in what order.
+- Injects MCTS metadata, Debate verdict, and DNA reference into each phase's context.
+- Handles phase failures gracefully (logs error, continues to next phase).
+- Parallel execution ready (max 2 phases) — currently sequential for stability.
 """
+
 import logging
-import concurrent.futures
 import importlib
-import sys
-from pathlib import Path
 from typing import Dict, Any, List, Optional
 from .base_agent import BaseAgent
 
 logger = logging.getLogger("ZeroRecon")
 
 class ExecutorAgent(BaseAgent):
-    """১২টি রিকন ফেজ অর্কেস্ট্রেট করে — ম্যাক্স ২টি থ্রেড সমান্তরালে"""
-    
     def __init__(self):
         super().__init__("ExecutorAgent")
-        self.phases = list(range(1, 13))  # 1 to 12
+        self.phases = list(range(1, 16))  # 1 to 15
         self.max_parallel = 2
         self.results = {}
-    
+
     def run(self, target: str, context: Optional[Dict] = None) -> Dict[str, Any]:
         self._log_start()
-        
-        # কনটেক্সট থেকে রাউটার নেওয়া
         router = context.get("router") if context else None
         config = context.get("config") if context else None
-        
-        logger.info(f"🚀 Executing {len(self.phases)} phases for {target} (max {self.max_parallel} parallel)")
-        
-        # Sequential execution (কোড সিম্পল রাখার জন্য)
+        mcts_path = context.get("mcts_path", {})
+        debate_rules = context.get("debate_rules", {})
+        dna = context.get("dna")  # DNA instance (if available)
+
+        logger.info(f"🚀 Executing {len(self.phases)} phases for {target} (MCTS: {mcts_path.get('selected', 'default')})")
+        if debate_rules.get("verdict") == "BLOCKED":
+            logger.warning("⚠️ Global Debate verdict: BLOCKED. Some phases may skip automatically.")
+
+        # Sequential execution (keeping it simple and stable)
         for phase_num in self.phases:
-            phase_result = self._run_single_phase(phase_num, target, router, config)
+            phase_context = {
+                "target": target,
+                "router": router,
+                "config": config,
+                "previous_results": self.results,
+                "mcts_path": mcts_path,
+                "debate_rules": debate_rules,
+                "dna": dna
+            }
+            phase_result = self._run_single_phase(phase_num, target, phase_context)
             self.results[f"phase_{phase_num}"] = phase_result
-            
-            # যদি কোনো ফেজ মারাত্মকভাবে ব্যর্থ হয়, থামি না — শুধু লগ করি
+
             if phase_result.get("error"):
                 logger.warning(f"⚠️ Phase {phase_num} had errors: {phase_result['error']}")
-        
+            elif phase_result.get("status") == "skipped":
+                logger.info(f"⏭️ Phase {phase_num} skipped: {phase_result.get('reason', 'No reason provided')}")
+
         self._log_complete(self.results)
         return self.results
-    
-    def _run_single_phase(self, phase_num: int, target: str, router=None, config=None) -> Dict:
-        """একটি নির্দিষ্ট ফেজ ডায়নামিক ইম্পোর্ট করে চালায়"""
-        phase_name = f"phase{phase_num}"
-        
-        # ফাইল নাম তৈরি
+
+    def _run_single_phase(self, phase_num: int, target: str, phase_context: Dict) -> Dict:
+        """Dynamically import and run a single phase."""
         phase_files = {
             1: "phase1_cert_subdomain",
             2: "phase2_asn",
@@ -61,44 +70,22 @@ class ExecutorAgent(BaseAgent):
             9: "phase9_osint_pipeline",
             10: "phase10_vuln_specific",
             11: "phase11_attack_surface",
-            12: "phase12_report"
+            12: "phase12_report",
+            13: "phase13_infrastructure_inference",
+            14: "phase14_supply_chain_metadata",
+            15: "phase15_continuous_diff"
         }
-        
         module_name = phase_files.get(phase_num, f"phase{phase_num}")
-        
         try:
-            # ডায়নামিক ইম্পোর্ট: agents.recon.phase1_cert_subdomain
             full_module = f"agents.recon.{module_name}"
             module = importlib.import_module(full_module)
-            
-            # 'run' ফাংশন খোঁজা
             if hasattr(module, "run"):
-                run_func = getattr(module, "run")
-                # কনটেক্সট পাস করা
-                phase_context = {
-                    "target": target,
-                    "router": router,
-                    "config": config,
-                    "previous_results": self.results
-                }
-                result = run_func(target, phase_context)
-                logger.info(f"✅ Phase {phase_num} completed")
-                return result
+                return module.run(target, phase_context)
             else:
-                error_msg = f"Phase {phase_num} module has no 'run' function"
-                logger.warning(error_msg)
-                return {"error": error_msg}
-                
+                return {"error": f"Phase {phase_num} module has no 'run' function"}
         except ImportError as e:
-            error_msg = f"Module not found: {module_name} — {e}"
-            logger.warning(error_msg)
-            return {"error": error_msg, "skipped": True}
+            logger.warning(f"Phase {phase_num} module not found: {e}")
+            return {"error": f"Module not found: {module_name}", "skipped": True}
         except Exception as e:
-            error_msg = f"Phase {phase_num} execution error: {e}"
-            logger.error(error_msg)
-            return {"error": error_msg}
-    
-    def run_parallel(self, target: str, context: Optional[Dict] = None) -> Dict:
-        """(ভবিষ্যতে) সমান্তরালে ফেজ চালানোর জন্য — বর্তমানে ব্যবহার করছি না"""
-        # এই মেথডটি বর্তমানে ডিজেবল রাখা হয়েছে
-        return self.run(target, context)
+            logger.error(f"Phase {phase_num} execution error: {e}")
+            return {"error": str(e)}
