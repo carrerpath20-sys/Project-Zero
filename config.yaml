@@ -120,6 +120,8 @@ opsec:
   proxy_rotation: "round-robin"
   ip_masking: true
   domain_masking: false
+  custom_headers:
+    X-HackerOne-Research: "hacking_with_midul"
 
 # ------------------------------------------------------------
 #  🔧 অটো-ইন্সটল ও ডিপেন্ডেন্সি
