@@ -1,162 +1,199 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Phase 9: Complete OSINT Recon Pipeline
-- Aggregates data from all previous phases
-- Creates a unified graph of IPs, domains, emails, subdomains
-- Links assets together (e.g., IP -> domains hosted)
-- Uses AI to identify hidden relationships and attack paths
+🔥 PHASE 7 — ASN TO IP RANGE + HOST MAPPING (Level 5 — God-Tier)
+- Debate Verdict: Skips if WAF risk is high (BLOCKED).
+- MCTS Integration: Uses priority IPs from MCTS metadata.
+- Parallel Host Scanning: ThreadPool for fast live host discovery.
+- Smart Port Scanning: Checks common ports (80, 443, 22, 3389).
+- AI-Powered Host Prioritization: Identifies critical hosts (web servers, databases).
 """
 
-import json
+import socket
 import logging
+import ipaddress
+import concurrent.futures
 from typing import Dict, Any, List, Set, Optional
-from collections import defaultdict
 
 logger = logging.getLogger("ZeroRecon")
 
+# ============================================================
+#  কোর পোর্ট (দ্রুত স্ক্যানের জন্য)
+# ============================================================
+CORE_PORTS = [80, 443, 22, 3389, 3306, 6379, 5432, 8080, 8443]
+
+# ============================================================
+#  মেইন ফাংশন
+# ============================================================
 def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Main entry point for Phase 9.
-    Combines all previous phase results into a comprehensive OSINT graph.
-    """
-    logger.info(f"🔗 Phase 9 started for: {target}")
-    
+    logger.info(f"🗺️ Phase 7 (Level 5) started for: {target}")
+
+    # =================================================================
+    # ১. Debate Verdict চেক (WAF বাইপাস)
+    # =================================================================
+    debate_rules = context.get("debate_rules", {})
+    if debate_rules.get("verdict") == "BLOCKED":
+        logger.warning("⚠️ Debate blocked Phase 7 (ASN Mapping). Skipping to avoid WAF detection.")
+        return {
+            "target": target,
+            "status": "skipped",
+            "reason": "Debate BLOCKED",
+            "live_hosts": [],
+            "hosts_by_service": {},
+            "mcts_priority_used": False,
+            "errors": []
+        }
+
     router = context.get("router")
+    config = context.get("config", {})
+    scan_config = config.get("scan", {})
+    timeout = scan_config.get("timeout", 5)
+    max_workers = min(scan_config.get("max_threads", 10), 10)
+
+    # =================================================================
+    # ২. আগের ফেজ থেকে ASN প্রিফিক্স ও অরিজিন আইপি সংগ্রহ
+    # =================================================================
     prev_results = context.get("previous_results", {})
-    
-    # =====================================================================
-    # ১. সব ফেজের ডাটা একত্রিত করা
-    # =====================================================================
-    aggregated = {
-        "subdomains": set(),
-        "ips": set(),
-        "emails": set(),
-        "asns": set(),
-        "urls": set(),
-        "cloud_assets": [],
-        "vulnerabilities": [],
-        "open_ports": [],
-        "github_repos": []
-    }
-    
-    # ফেজ ১: সাবডোমেইন
-    phase1 = prev_results.get("phase_1", {})
-    if phase1:
-        aggregated["subdomains"].update(phase1.get("subdomains", []))
-    
-    # ফেজ ২: ASN ও IP
     phase2 = prev_results.get("phase_2", {})
-    if phase2:
-        asn_info = phase2.get("asn_info", {})
-        if asn_info.get("asn"):
-            aggregated["asns"].add(asn_info["asn"])
-        if phase2.get("target_ip"):
-            aggregated["ips"].add(phase2["target_ip"])
-        aggregated["ips"].update(phase2.get("origin_ips", []))
-    
-    # ফেজ ৩: GitHub
-    phase3 = prev_results.get("phase_3", {})
-    if phase3:
-        aggregated["github_repos"].extend(phase3.get("repositories", []))
-    
-    # ফেজ ৪: ওয়েব্যাক URL
-    phase4 = prev_results.get("phase_4", {})
-    if phase4:
-        aggregated["urls"].update(phase4.get("wayback_urls", []))
-    
-    # ফেজ ৫: ক্লাউড অ্যাসেট
-    phase5 = prev_results.get("phase_5", {})
-    if phase5:
-        aggregated["cloud_assets"].extend(phase5.get("confirmed_public", []))
-    
-    # ফেজ ৬: পারমিউটেশন
-    phase6 = prev_results.get("phase_6", {})
-    if phase6:
-        aggregated["subdomains"].update(phase6.get("permutations", []))
-    
-    # ফেজ ৭: লাইভ হোস্ট
-    phase7 = prev_results.get("phase_7", {})
-    if phase7:
-        aggregated["ips"].update(phase7.get("live_hosts", []))
-    
-    # ফেজ ৮: DNS ব্রুটফোর্স
-    phase8 = prev_results.get("phase_8", {})
-    if phase8:
-        aggregated["subdomains"].update(phase8.get("found_subdomains", []))
-    
-    # ফেজ ১০: ভলনারেবিলিটি (যদি পরে যোগ হয়)
-    # phase10 = prev_results.get("phase_10", {})
-    
-    # =====================================================================
-    # ২. ডাটা ক্লিনিং ও ডিডুপ্লিকেশন
-    # =====================================================================
+    prefixes = phase2.get("prefixes", [])
+    asn = phase2.get("asn_info", {}).get("asn", "Unknown")
+    origin_ips = phase2.get("origin_ips", [])
+
+    # =================================================================
+    # ৩. MCTS থেকে প্রায়োরিটি আইপি (যদি থাকে)
+    # =================================================================
+    mcts_path = context.get("mcts_path", {})
+    priority_ips = mcts_path.get("metadata", {}).get("priority_ips", [])
+    if priority_ips:
+        logger.info(f"⭐ MCTS provided {len(priority_ips)} priority IPs.")
+
     result = {
         "target": target,
-        "subdomains": list(aggregated["subdomains"])[:200],
-        "ips": list(aggregated["ips"])[:100],
-        "emails": list(aggregated["emails"])[:20],
-        "asns": list(aggregated["asns"]),
-        "urls": list(aggregated["urls"])[:200],
-        "cloud_assets": aggregated["cloud_assets"][:20],
-        "github_repos": aggregated["github_repos"][:20],
-        "graph": {},
-        "ai_insights": None
+        "asn": asn,
+        "total_ranges": len(prefixes),
+        "live_hosts": [],
+        "hosts_by_service": {},
+        "mcts_priority_used": bool(priority_ips),
+        "ai_insights": None,
+        "errors": []
     }
-    
-    # =====================================================================
-    # ৩. গ্রাফ তৈরি (নোড ও এজ)
-    # =====================================================================
-    graph = {
-        "nodes": [],
-        "edges": []
-    }
-    
-    # নোড যোগ
-    for sub in result["subdomains"][:30]:
-        graph["nodes"].append({"id": sub, "type": "subdomain"})
-    for ip in result["ips"][:20]:
-        graph["nodes"].append({"id": ip, "type": "ip"})
-    for asn in result["asns"]:
-        graph["nodes"].append({"id": asn, "type": "asn"})
-    for url in result["urls"][:20]:
-        graph["nodes"].append({"id": url[:50], "type": "url"})
-    
-    # এজ (সাবডোমেইন -> IP, ASN -> IP, ইত্যাদি)
-    # ডেমো: সাবডোমেইন থেকে IP ম্যাপিং (বাস্তবে DNS রেজলভ করা লাগবে)
-    if result["subdomains"] and result["ips"]:
-        for i, sub in enumerate(result["subdomains"][:10]):
-            ip = result["ips"][i % len(result["ips"])]
-            graph["edges"].append({"source": sub, "target": ip, "type": "resolves_to"})
-    
-    result["graph"] = graph
-    
-    # =====================================================================
-    # ৪. AI দিয়ে ইনসাইট & অ্যাটাক পাথ
-    # =====================================================================
-    if router:
+
+    if not prefixes and not priority_ips and not origin_ips:
+        logger.warning("No IP ranges or priority IPs available. Skipping.")
+        result["errors"].append("No prefixes or priority IPs")
+        return result
+
+    # =================================================================
+    # ৪. টার্গেট আইপি লিস্ট তৈরি (MCTS Priority -> Origin IPs -> Prefixes)
+    # =================================================================
+    targets_to_scan: Set[str] = set()
+
+    # ৪a: MCTS Priority IPs (সর্বোচ্চ প্রায়োরিটি)
+    if priority_ips:
+        targets_to_scan.update(priority_ips[:10])
+
+    # ৪b: Origin IPs (Phase 2 থেকে)
+    if origin_ips:
+        targets_to_scan.update(origin_ips[:10])
+
+    # ৪c: Prefixes থেকে আইপি (সীমিত সংখ্যক)
+    for prefix in prefixes[:5]:  # প্রথম ৫টি রেঞ্জ
         try:
+            network = ipaddress.ip_network(prefix, strict=False)
+            # প্রথম ১০টি হোস্ট (প্রায়োরিটি)
+            for ip in list(network.hosts())[:10]:
+                targets_to_scan.add(str(ip))
+        except Exception as e:
+            logger.debug(f"Prefix parse error {prefix}: {e}")
+
+    # সীমাবদ্ধতা (max 100 টার্গেট)
+    targets_to_scan = list(targets_to_scan)[:100]
+    logger.info(f"🎯 Scanning {len(targets_to_scan)} targets (Priority: MCTS={bool(priority_ips)}, Origin={bool(origin_ips)})")
+
+    # =================================================================
+    # ৫. প্যারালাল হোস্ট স্ক্যান
+    # =================================================================
+    live_hosts: Set[str] = set()
+    hosts_with_services: Dict[str, List[int]] = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_ip = {
+            executor.submit(_scan_host, ip, timeout): ip 
+            for ip in targets_to_scan
+        }
+        for future in concurrent.futures.as_completed(future_to_ip):
+            ip = future_to_ip[future]
+            try:
+                is_live, ports = future.result(timeout=timeout+5)
+                if is_live:
+                    live_hosts.add(ip)
+                    if ports:
+                        hosts_with_services[ip] = ports
+                        # লাইভ হোস্টের সার্ভিস লগ
+                        services = ", ".join([f"{p}" for p in ports])
+                        logger.info(f"✅ Live host: {ip} (ports: {services})")
+                    else:
+                        logger.debug(f"✅ Live host: {ip} (no open core ports)")
+            except Exception as e:
+                logger.debug(f"Scan error for {ip}: {e}")
+
+    result["live_hosts"] = list(live_hosts)[:50]
+    result["hosts_by_service"] = hosts_with_services
+
+    # =================================================================
+    # ৬. AI-চালিত হোস্ট প্রায়োরিটাইজেশন (যদি রাউটার থাকে)
+    # =================================================================
+    if router and live_hosts:
+        try:
+            # শীর্ষ ১০টি হোস্টের তথ্য
+            top_hosts = list(live_hosts)[:10]
+            top_services = {ip: hosts_with_services.get(ip, []) for ip in top_hosts}
             prompt = f"""
-            OSINT pipeline results for {target}:
-            - Subdomains: {len(result['subdomains'])}
-            - IPs: {len(result['ips'])}
-            - ASNs: {len(result['asns'])}
-            - URLs: {len(result['urls'])}
-            - Cloud assets: {len(result['cloud_assets'])}
-            - GitHub repos: {len(result['github_repos'])}
+            ASN Mapping results for {target} (ASN: {asn}):
+            - Total live hosts: {len(live_hosts)}
+            - Hosts with services: {len(hosts_with_services)}
+            - Sample hosts: {top_hosts}
+            - Sample services: {top_services}
             
             Provide:
-            1. Top 3 critical assets (most likely high-value).
-            2. Suggested attack paths (e.g., subdomain takeover, cloud misconfig).
-            3. Overall risk score (1-10) and justification.
-            4. Next steps for manual testing.
+            1. Which hosts are most critical (web servers, databases, admin panels)?
+            2. Suggested manual enumeration targets.
+            3. Potential attack paths.
             """
-            ai_response = router.route("osint_insights", prompt)
+            ai_response = router.route("asn_mapping_insights", prompt)
             if ai_response:
                 result["ai_insights"] = ai_response
-                logger.info("✅ AI OSINT insights received")
+                logger.info("✅ AI mapping insights received.")
         except Exception as e:
             logger.warning(f"AI insights failed: {e}")
-    
-    logger.info(f"✅ Phase 9 complete. Graph nodes: {len(graph['nodes'])}, edges: {len(graph['edges'])}")
+
+    logger.info(f"✅ Phase 7 complete. Live hosts: {len(live_hosts)}")
     return result
+
+
+# ============================================================
+#  হেল্পার ফাংশন: হোস্ট স্ক্যান (প্যারালাল-রেডি)
+# ============================================================
+def _scan_host(ip: str, timeout: int) -> tuple:
+    """
+    Scan a single host for core ports.
+    Returns: (is_live, [open_ports])
+    """
+    open_ports = []
+    for port in CORE_PORTS:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((ip, port))
+            sock.close()
+            if result == 0:
+                open_ports.append(port)
+        except:
+            pass
+
+    is_live = bool(open_ports)  # যেকোনো একটি পোর্ট ওপেন থাকলেই লাইভ
+    # বিশেষ করে ৮০ বা ৪৪৩ ওপেন থাকলে নিশ্চিত লাইভ
+    if 80 in open_ports or 443 in open_ports:
+        is_live = True
+
+    return is_live, open_ports
