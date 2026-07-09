@@ -136,7 +136,7 @@ class DNA:
                     sim_list = []
                     for idx, dist in enumerate(results['distances'][0]):
                         sim_list.append({
-                            "similarity": 1.0 - dist,  # cosine distance → similarity
+                            "similarity": 1.0 - dist,
                             "metadata": results['metadatas'][0][idx],
                             "text": results['documents'][0][idx][:200] + "..."
                         })
@@ -144,9 +144,8 @@ class DNA:
                 return []
         except Exception as e:
             logger.error(f"❌ ChromaDB query failed: {e}. Falling back to NumPy.")
-            # Fallback to NumPy if ChromaDB fails
             return self._numpy_similarity(vector, top_k)
-
+        
         # NumPy fallback (if ChromaDB not used)
         return self._numpy_similarity(vector, top_k)
 
