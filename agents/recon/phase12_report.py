@@ -1,213 +1,336 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Phase 10: Vulnerability Specific Enumeration
-- Subdomain Takeover testing (CNAME + dangling)
-- CORS misconfiguration discovery (Access-Control-Allow-Origin: *)
-- Open port and service discovery (Top 20 ports)
-- Uses AI to prioritize and confirm false positives
+🔥 PHASE 12 — REPORT GENERATION (Level 5 — God-Tier)
+- Aggregates all phases + Evo engines (MCTS, Debate, Symbolic, DNA, Profiler)
+- Generates JSON, Markdown, and HTML reports
+- HTML is a professional dark-theme dashboard with stats, tables, and alerts
+- Includes risk score, critical assets, and actionable recommendations
 """
 
-import socket
+import os
+import json
 import logging
-import requests
-import concurrent.futures
-from typing import Dict, Any, List, Set, Optional, Tuple
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("ZeroRecon")
 
 def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Main entry point for Phase 10.
+    Main entry: compiles all results and generates reports.
     """
-    logger.info(f"🛡️ Phase 10 started for: {target}")
-    
-    router = context.get("router")
-    config = context.get("config", {})
-    scan_config = config.get("scan", {})
-    timeout = scan_config.get("timeout", 5)
-    max_threads = scan_config.get("max_threads", 10)
-    
-    # আগের ফেজ থেকে সাবডোমেইন ও আইপি নেওয়া
+    logger.info(f"📝 Phase 12 (Level 5) started for: {target}")
+
     prev_results = context.get("previous_results", {})
-    all_subdomains = set()
-    all_ips = set()
-    
-    # বিভিন্ন ফেজ থেকে সাবডোমেইন সংগ্রহ
-    for phase_key in ["phase_1", "phase_6", "phase_8", "phase_9"]:
-        phase_data = prev_results.get(phase_key, {})
-        if phase_key == "phase_1":
-            all_subdomains.update(phase_data.get("subdomains", []))
-        elif phase_key == "phase_6":
-            all_subdomains.update(phase_data.get("permutations", []))
-        elif phase_key == "phase_8":
-            all_subdomains.update(phase_data.get("found_subdomains", []))
-        elif phase_key == "phase_9":
-            all_subdomains.update(phase_data.get("subdomains", []))
-    
-    # ফেজ ২ ও ৭ থেকে আইপি
-    phase2 = prev_results.get("phase_2", {})
-    phase7 = prev_results.get("phase_7", {})
-    if phase2.get("target_ip"):
-        all_ips.add(phase2["target_ip"])
-    all_ips.update(phase2.get("origin_ips", []))
-    all_ips.update(phase7.get("live_hosts", []))
-    
-    all_subdomains = list(all_subdomains)[:100]
-    all_ips = list(all_ips)[:20]
-    
-    result = {
-        "target": target,
-        "takeover_candidates": [],
-        "cors_misconfigs": [],
-        "open_ports": [],
-        "ai_analysis": None,
-        "errors": []
+    mcts_path = context.get("mcts_path", {})
+    debate_rules = context.get("debate_rules", {})
+    router = context.get("router")
+
+    # =====================================================================
+    # ১. ডাটা অ্যাগ্রিগেশন (সব ফেজ + ইভো)
+    # =====================================================================
+    aggregated = _aggregate_data(prev_results)
+
+    # ইভো ডাটা
+    evo_meta = {
+        "mcts": {
+            "selected_path": mcts_path.get("selected"),
+            "confidence": mcts_path.get("confidence"),
+            "utility": mcts_path.get("utility")
+        },
+        "debate": {
+            "verdict": debate_rules.get("verdict"),
+            "flaws": debate_rules.get("flaws", [])[:3]
+        },
+        "dna": {
+            "total_vectors": _get_dna_stats()
+        }
     }
-    
+
     # =====================================================================
-    # ১. সাবডোমেইন টেকওভার চেক
+    # ২. রিস্ক স্কোর (ফাইনাল)
     # =====================================================================
-    takeover_candidates = []
-    logger.info(f"🔍 Checking {len(all_subdomains)} subdomains for takeover...")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
-        future_to_sub = {executor.submit(_check_takeover, sub, timeout): sub for sub in all_subdomains}
-        for future in concurrent.futures.as_completed(future_to_sub):
-            sub = future_to_sub[future]
-            try:
-                is_vuln, details = future.result()
-                if is_vuln:
-                    takeover_candidates.append({"subdomain": sub, "details": details})
-                    logger.warning(f"⚠️ Potential takeover: {sub}")
-            except Exception as e:
-                logger.debug(f"Takeover check error for {sub}: {e}")
-    
-    result["takeover_candidates"] = takeover_candidates
-    
+    risk_score = _calculate_risk_score(aggregated)
+
     # =====================================================================
-    # ২. CORS মিসকনফিগ চেক
+    # ৩. রেকমেন্ডেশন
     # =====================================================================
-    cors_issues = []
-    targets_to_check = all_subdomains[:10] + [target]  # প্রথম ১০টি সাবডোমেইন + মূল ডোমেইন
-    logger.info(f"🔍 Checking CORS for {len(targets_to_check)} targets...")
-    
-    for host in targets_to_check:
-        url = f"https://{host}"
-        try:
-            # `Origin: https://evil.com` হেডার পাঠানো
-            headers = {"Origin": "https://evil.com"}
-            resp = requests.get(url, timeout=timeout, headers=headers, allow_redirects=False, verify=False)
-            acao = resp.headers.get("Access-Control-Allow-Origin")
-            acac = resp.headers.get("Access-Control-Allow-Credentials")
-            
-            if acao == "*" or acao == "https://evil.com":
-                issue = {
-                    "host": host,
-                    "acao": acao,
-                    "credentials": acac == "true",
-                    "status_code": resp.status_code
-                }
-                cors_issues.append(issue)
-                logger.warning(f"⚠️ CORS misconfig on {host}: ACAO={acao}")
-        except Exception as e:
-            logger.debug(f"CORS check error for {host}: {e}")
-    
-    result["cors_misconfigs"] = cors_issues
-    
+    recommendations = _generate_recommendations(aggregated, risk_score)
+
     # =====================================================================
-    # ৩. ওপেন পোর্ট স্ক্যান (মূল টার্গেট ও লাইভ আইপি)
+    # ৪. AI এক্সিকিউটিভ সামারি (যদি রাউটার থাকে)
     # =====================================================================
-    open_ports = []
-    ports_to_scan = [21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 993, 
-                     995, 1723, 3306, 3389, 5432, 5900, 6379, 8080, 8443, 27017]
-    
-    scan_targets = [target] + all_ips[:5]
-    logger.info(f"🔍 Scanning ports for {len(scan_targets)} targets...")
-    
-    for target_ip in scan_targets:
-        open_for_target = []
-        for port in ports_to_scan:
-            if _check_port(target_ip, port, timeout):
-                open_for_target.append(port)
-        if open_for_target:
-            open_ports.append({
-                "target": target_ip,
-                "ports": open_for_target,
-                "count": len(open_for_target)
-            })
-            logger.info(f"📡 {target_ip} has open ports: {open_for_target}")
-    
-    result["open_ports"] = open_ports
-    
-    # =====================================================================
-    # ৪. AI দিয়ে ফলাফল অ্যানালাইসিস
-    # =====================================================================
+    ai_summary = None
     if router:
         try:
             prompt = f"""
-            Vulnerability scan results for {target}:
-            - Subdomain takeover candidates: {len(takeover_candidates)}
-            - CORS misconfigurations: {len(cors_issues)}
-            - Open ports found: {sum(p['count'] for p in open_ports)}
-            
-            Provide:
-            1. Which takeover candidates are most likely real?
-            2. Criticality of CORS issues (any with credentials=True)?
-            3. Recommended immediate actions for high-risk findings.
+            Target: {target}
+            Subdomains: {len(aggregated.get('subdomains', []))}
+            Live hosts: {len(aggregated.get('ips', []))}
+            Takeover candidates: {len(aggregated.get('takeover_candidates', []))}
+            CORS issues: {len(aggregated.get('cors_misconfigs', []))}
+            Open ports: {len(aggregated.get('open_ports', []))}
+            Risk score: {risk_score}/100
+            MCTS path: {mcts_path.get('selected')}
+            Debate verdict: {debate_rules.get('verdict')}
+
+            Provide a 200-word executive summary for a security team.
             """
-            ai_response = router.route("vuln_analysis", prompt)
-            if ai_response:
-                result["ai_analysis"] = ai_response
-                logger.info("✅ AI vulnerability analysis completed")
-        except Exception as e:
-            logger.warning(f"AI analysis failed: {e}")
-    
-    logger.info(f"✅ Phase 10 complete. Takeover: {len(takeover_candidates)}, CORS: {len(cors_issues)}")
-    return result
-
-
-def _check_takeover(domain: str, timeout: int) -> Tuple[bool, Dict]:
-    """
-    সাবডোমেইন টেকওভার চেক: CNAME রেকর্ড খোঁজে এবং সেই CNAME-র IP/স্ট্যাটাস চেক করে
-    """
-    try:
-        import dns.resolver
-        resolver = dns.resolver.Resolver()
-        resolver.timeout = timeout
-        
-        # CNAME রেকর্ড খোঁজা
-        try:
-            answers = resolver.resolve(domain, 'CNAME')
-            cname = str(answers[0].target).rstrip('.')
-        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
-            return False, {}
-        
-        # CNAME পাওয়া গেলে, সেই ডোমেইনে HTTP রিকোয়েস্ট পাঠানো
-        # (এটা নির্ভর করে লক্ষ্য সেবা ডাউন কিনা, যেমন: 404/403)
-        try:
-            resp = requests.get(f"https://{domain}", timeout=timeout, allow_redirects=False, verify=False)
-            # 404 বা 503 প্রায়ই টেকওভারের নির্দেশক
-            if resp.status_code in [404, 503, 403]:
-                return True, {"cname": cname, "status_code": resp.status_code, "reason": "Dangling service"}
-        except requests.exceptions.ConnectionError:
-            # কোনো সার্ভার নেই => টেকওভার সম্ভব
-            return True, {"cname": cname, "status_code": 0, "reason": "No server responding"}
+            ai_resp = router.route("executive_summary_final", prompt)
+            if ai_resp:
+                ai_summary = ai_resp
         except:
             pass
-        return False, {}
-    except ImportError:
-        # dns.resolver না থাকলে সকেট দিয়ে ডামি চেক
-        logger.warning("dnspython not found, skipping detailed takeover check.")
-        return False, {}
-    except:
-        return False, {}
+
+    # =====================================================================
+    # ৫. রিপোর্ট ডাটা তৈরি
+    # =====================================================================
+    report_data = {
+        "meta": {
+            "target": target,
+            "scan_date": datetime.now().isoformat(),
+            "framework": "Zero Recon v2.0",
+            "version": "Level 5 (Evo-Delta)"
+        },
+        "summary": {
+            "total_subdomains": len(aggregated.get("subdomains", [])),
+            "total_ips": len(aggregated.get("ips", [])),
+            "total_takeover": len(aggregated.get("takeover_candidates", [])),
+            "total_cors": len(aggregated.get("cors_misconfigs", [])),
+            "total_open_ports": len(aggregated.get("open_ports", [])),
+            "risk_score": risk_score,
+            "critical_assets": len(aggregated.get("critical_assets", []))
+        },
+        "findings": {
+            "subdomains": aggregated.get("subdomains", [])[:50],
+            "live_hosts": aggregated.get("ips", [])[:20],
+            "takeover_candidates": aggregated.get("takeover_candidates", [])[:10],
+            "cors_misconfigs": aggregated.get("cors_misconfigs", [])[:5],
+            "open_ports": aggregated.get("open_ports", [])[:10],
+            "endpoints": aggregated.get("endpoints", [])[:20],
+            "secrets": aggregated.get("secrets", [])[:5]
+        },
+        "evo": evo_meta,
+        "ai_executive_summary": ai_summary,
+        "recommendations": recommendations
+    }
+
+    # =====================================================================
+    # ৬. রিপোর্ট ফাইল লেখা
+    # =====================================================================
+    output_dir = Path("outputs/reports")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_filename = f"report_{target}_{timestamp}"
+
+    # JSON
+    json_path = output_dir / f"{base_filename}.json"
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(report_data, f, indent=2, default=str)
+    logger.info(f"✅ JSON report: {json_path}")
+
+    # Markdown
+    md_path = output_dir / f"{base_filename}.md"
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(_generate_markdown(report_data))
+    logger.info(f"✅ Markdown report: {md_path}")
+
+    # HTML
+    html_path = output_dir / f"{base_filename}.html"
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(_generate_html(report_data))
+    logger.info(f"✅ HTML report: {html_path}")
+
+    return {
+        "target": target,
+        "report_files": [str(json_path), str(md_path), str(html_path)],
+        "summary": report_data["summary"],
+        "status": "complete"
+    }
 
 
-def _check_port(host: str, port: int, timeout: int) -> bool:
-    """পোর্ট ওপেন কিনা চেক"""
+# ============================================================
+#  হেল্পার ফাংশন (অ্যাগ্রিগেশন + রিপোর্ট জেনারেশন)
+# ============================================================
+
+def _aggregate_data(prev_results: Dict) -> Dict:
+    """সব ফেজ থেকে ডাটা একত্রিত করে"""
+    aggregated = {
+        "subdomains": set(),
+        "ips": set(),
+        "takeover_candidates": [],
+        "cors_misconfigs": [],
+        "open_ports": [],
+        "endpoints": [],
+        "secrets": [],
+        "critical_assets": []
+    }
+
+    # ফেজ ১: সাবডোমেইন
+    p1 = prev_results.get("phase_1", {})
+    aggregated["subdomains"].update(p1.get("subdomains", []))
+    aggregated["subdomains"].update(p1.get("live_subdomains", []))
+
+    # ফেজ ২: আইপি
+    p2 = prev_results.get("phase_2", {})
+    if p2.get("target_ip"):
+        aggregated["ips"].add(p2["target_ip"])
+    aggregated["ips"].update(p2.get("origin_ips", []))
+
+    # ফেজ ৪: এন্ডপয়েন্ট
+    p4 = prev_results.get("phase_4", {})
+    aggregated["endpoints"].extend(p4.get("endpoints_found", []))
+    aggregated["secrets"].extend(p4.get("secrets_found", []))
+
+    # ফেজ ১০: ভলনারেবিলিটি
+    p10 = prev_results.get("phase_10", {})
+    aggregated["takeover_candidates"] = p10.get("takeover_candidates", [])
+    aggregated["cors_misconfigs"] = p10.get("cors_misconfigs", [])
+    aggregated["open_ports"] = p10.get("open_ports", [])
+    risk_score = p10.get("risk_score", 0)
+    if risk_score > 70:
+        aggregated["critical_assets"] = p10.get("takeover_candidates", [])[:3]
+
+    # ফেজ ৬ & ৮: পারমিউটেশন
+    p6 = prev_results.get("phase_6", {})
+    aggregated["subdomains"].update(p6.get("permutations", []))
+
+    # ফেজ ৯: ওএসআইএনটি
+    p9 = prev_results.get("phase_9", {})
+    aggregated["ips"].update(p9.get("ips", []))
+
+    # ডুপ্লিকেট বাদ
+    aggregated["subdomains"] = list(aggregated["subdomains"])[:500]
+    aggregated["ips"] = list(aggregated["ips"])[:100]
+
+    return aggregated
+
+def _calculate_risk_score(aggregated: Dict) -> int:
+    """ফাইনাল রিস্ক স্কোর"""
+    score = 0
+    if len(aggregated.get("takeover_candidates", [])) > 0:
+        score += min(40, len(aggregated["takeover_candidates"]) * 10)
+    if len(aggregated.get("cors_misconfigs", [])) > 0:
+        score += min(20, len(aggregated["cors_misconfigs"]) * 5)
+    if len(aggregated.get("open_ports", [])) > 0:
+        high_risk = sum(1 for p in aggregated["open_ports"] if p.get("port") in [22, 3389, 3306, 6379])
+        score += min(30, high_risk * 10)
+    if len(aggregated.get("subdomains", [])) > 100:
+        score += 10
+    return min(100, score)
+
+def _generate_recommendations(aggregated: Dict, risk_score: int) -> List[str]:
+    """অ্যাকশনেবল রেকমেন্ডেশন"""
+    recs = []
+    if aggregated.get("takeover_candidates"):
+        recs.append("🔴 PRIORITY: Verify and claim takeover candidates immediately.")
+    if aggregated.get("cors_misconfigs"):
+        recs.append("🟠 HIGH: Fix CORS misconfigurations to prevent data exfiltration.")
+    if any(p.get("port") in [22, 3389, 3306] for p in aggregated.get("open_ports", [])):
+        recs.append("🔴 CRITICAL: Secure exposed SSH/RDP/MySQL services.")
+    if risk_score > 70:
+        recs.append("🔴 IMMEDIATE: The target is at high risk. Conduct manual penetration testing.")
+    else:
+        recs.append("🟢 LOW: No critical issues found. Continue monitoring.")
+    return recs
+
+def _get_dna_stats() -> int:
+    """ডিএনএ ভেক্টর সংখ্যা (যদি পাওয়া যায়)"""
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
+        from evo.dna import DNA
+        dna = DNA()
+        stats = dna.get_stats()
+        return stats.get("total_patterns", 0)
     except:
-        return False
+        return 0
+
+def _generate_markdown(data: Dict) -> str:
+    """মার্কডাউন রিপোর্ট"""
+    md = f"""# 🔍 Zero Recon Report: {data['meta']['target']}
+
+**Scan Date:** {data['meta']['scan_date']}  
+**Framework:** {data['meta']['framework']}  
+**Risk Score:** {data['summary']['risk_score']}/100
+
+## 📊 Summary
+- Subdomains: {data['summary']['total_subdomains']}
+- Live IPs: {data['summary']['total_ips']}
+- Takeover Candidates: {data['summary']['total_takeover']}
+- CORS Issues: {data['summary']['total_cors']}
+- Open Ports: {data['summary']['total_open_ports']}
+
+## 🧠 AI Executive Summary
+{data.get('ai_executive_summary', 'No AI summary available.')}
+
+## 🔥 Critical Findings
+### Subdomain Takeover
+"""
+    for tc in data['findings'].get('takeover_candidates', [])[:5]:
+        md += f"- `{tc.get('subdomain')}` → {tc.get('service')} (Confidence: {tc.get('confidence')})\n"
+
+    md += "\n### Open Ports (High-Risk)\n"
+    for p in data['findings'].get('open_ports', [])[:5]:
+        md += f"- {p.get('target')}: {[x['port'] for x in p.get('open_ports', [])]}\n"
+
+    md += "\n## 🛠️ Recommendations\n"
+    for rec in data.get('recommendations', []):
+        md += f"- {rec}\n"
+
+    md += "\n---\n*Generated by Zero Recon Framework v2.0 (Level 5)*"
+    return md
+
+def _generate_html(data: Dict) -> str:
+    """এইচটিএমএল রিপোর্ট (প্রফেশনাল ড্যাশবোর্ড)"""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zero Recon Report: {data['meta']['target']}</title>
+<style>
+body {{ background: #0a0a0a; color: #c9d1d9; font-family: 'Segoe UI', monospace; padding: 30px; }}
+.container {{ max-width: 1200px; margin: 0 auto; }}
+h1 {{ color: #58a6ff; border-bottom: 2px solid #58a6ff; }}
+.stats {{ display: grid; grid-template-columns: repeat(4,1fr); gap: 20px; margin: 20px 0; }}
+.stat-box {{ background: #1a1a1a; padding: 15px; border-radius: 8px; border-left: 4px solid #58a6ff; }}
+.stat-box .num {{ font-size: 28px; font-weight: bold; color: #f0f6fc; }}
+.stat-box .label {{ color: #8b949e; font-size: 14px; }}
+.risk {{ background: { '#f85149' if data['summary']['risk_score'] > 70 else '#d29922' if data['summary']['risk_score'] > 40 else '#238636' }; padding: 10px 20px; border-radius: 8px; display: inline-block; }}
+.findings {{ background: #1a1a1a; padding: 20px; border-radius: 8px; margin: 15px 0; }}
+table {{ width: 100%; border-collapse: collapse; }}
+th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #30363d; }}
+th {{ color: #58a6ff; }}
+.critical {{ color: #f85149; }}
+.high {{ color: #d29922; }}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🔍 Zero Recon Report</h1>
+<p><strong>Target:</strong> {data['meta']['target']}</p>
+<p><strong>Date:</strong> {data['meta']['scan_date']}</p>
+<div class="stats">
+<div class="stat-box"><div class="num">{data['summary']['total_subdomains']}</div><div class="label">Subdomains</div></div>
+<div class="stat-box"><div class="num">{data['summary']['total_ips']}</div><div class="label">Live IPs</div></div>
+<div class="stat-box"><div class="num">{data['summary']['total_takeover']}</div><div class="label">Takeover</div></div>
+<div class="stat-box"><div class="num">{data['summary']['risk_score']}/100</div><div class="label">Risk Score</div></div>
+</div>
+<div class="risk">Risk Score: {data['summary']['risk_score']}/100</div>
+<h2>🧠 AI Executive Summary</h2>
+<div class="findings">{data.get('ai_executive_summary', 'No AI summary available.')}</div>
+<h2>🔥 Critical Findings</h2>
+<div class="findings">
+<table>
+<tr><th>Type</th><th>Details</th><th>Risk</th></tr>
+"""
+    for tc in data['findings'].get('takeover_candidates', [])[:5]:
+        html += f"<tr><td>Takeover</td><td>{tc.get('subdomain')} → {tc.get('service')}</td><td class='critical'>Critical</td></tr>"
+    for cors in data['findings'].get('cors_misconfigs', [])[:3]:
+        html += f"<tr><td>CORS</td><td>{cors.get('host')} ({cors.get('headers')})</td><td class='high'>High</td></tr>"
+    html += """</table></div>
+<h2>🛠️ Recommendations</h2><ul>"""
+    for rec in data.get('recommendations', []):
+        html += f"<li>{rec}</li>"
+    html += "</ul><hr><p><em>Generated by Zero Recon Framework v2.0 (Level 5)</em></p></div></body></html>"
