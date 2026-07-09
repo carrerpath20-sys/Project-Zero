@@ -42,6 +42,16 @@ ai:
     retry_on_402: true
 
 # ------------------------------------------------------------
+#  ☁️ ChromaDB Cloud Configuration (for DNA Engine)
+# ------------------------------------------------------------
+chromadb:
+  cloud:
+    enabled: true
+    api_key: "ck-FeM2RyHorAb9nj5pJHzNxREah31Rtv7AyqnKQ4ffqwvm"
+    tenant: "431f5d32-100a-4016-a2ae-43d9572e46ad"
+    database: "zero_recon_dna"
+
+# ------------------------------------------------------------
 #  🧬 EVO ENGINES (Level 5 — God-Tier Intelligence)
 # ------------------------------------------------------------
 evo:
