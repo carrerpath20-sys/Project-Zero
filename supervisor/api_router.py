@@ -4,10 +4,7 @@
 """
 ████████████████████████████████████████████████████████████████████████████
 █  API ROUTER — Hybrid AI Provider Selection with Key Rotation        █
-█  - Complexity-based model selection (high/medium/low)              █
-█  - Primary: Cerebras (5 RPM, 2400 RPD)                           █
-█  - Fallback: OpenRouter (50 RPD)                                █
-█  - Automatic key rotation and blacklisting                      █
+█  Level 5: Increased token limit for Evo engines                   █
 ████████████████████████████████████████████████████████████████████████████
 """
 
@@ -43,7 +40,11 @@ class AIRouter:
         self.cerebras_limit_rpm = config.get("ai", {}).get("cerebras", {}).get("limits", {}).get("max_rpm", 5)
         self.openrouter_limit_rpd = config.get("ai", {}).get("openrouter", {}).get("limits", {}).get("max_rpd", 50)
         
-        logger.info("🧠 AIRouter initialized with Cerebras + OpenRouter fallback")
+        # Level 5: বড় প্রম্পটের জন্য টোকেন লিমিট বাড়ানো
+        self.max_tokens_large = 8000   # MCTS, Debate, Mutator
+        self.max_tokens_normal = 4000  # বাকি কাজ
+        
+        logger.info("🧠 AIRouter (Level 5) initialized with Cerebras + OpenRouter fallback")
     
     def _load_keys(self):
         """কনফিগ থেকে API Keys লোড করে — একাধিক কী সাপোর্ট করে"""
@@ -55,8 +56,6 @@ class AIRouter:
                 "used_today": 0,
                 "status": "active"
             })
-        # বিকল্প: একাধিক Cerebras কী (CEREBRAS_API_KEY_1, _2 ...) — env থেকে পড়া যেতে পারে
-        
         # OpenRouter
         o_key = self.config.get("ai", {}).get("openrouter", {}).get("api_key")
         if o_key and o_key != "YOUR_OPENROUTER_API_KEY":
@@ -71,9 +70,12 @@ class AIRouter:
     
     def _get_complexity(self, task_type: str) -> str:
         """টাস্কের ধরণ দেখে জটিলতা লেভেল রিটার্ন করে"""
-        high_tasks = ["planning", "analysis", "code_rewrite", "cert_chain", "supervisor_decision"]
-        medium_tasks = ["subdomain_enum", "dns_parse", "github_dork", "asn_lookup", "permutation"]
-        low_tasks = ["validation", "formatting", "extract", "simple_check"]
+        high_tasks = ["planning", "analysis", "code_rewrite", "cert_chain", "supervisor_decision",
+                      "mcts_path_gen", "debate_attacker", "debate_defender", "mutator_gen",
+                      "attack_path_generation", "executive_summary_final", "asn_mapping_insights"]
+        medium_tasks = ["subdomain_enum", "dns_parse", "github_dork", "asn_lookup", "permutation",
+                        "pattern_learning", "permutation_filter", "historical_analysis"]
+        low_tasks = ["validation", "formatting", "extract", "simple_check", "cert_analysis"]
         
         task_lower = task_type.lower()
         if any(t in task_lower for t in high_tasks):
@@ -85,25 +87,16 @@ class AIRouter:
     
     def _get_available_key(self, keys: List[Dict]) -> Optional[Dict]:
         """সবচেয়ে কম ব্যবহৃত ও সক্রিয় কী বেছে নেয় (রাউন্ড-রবিন)"""
-        # ১. ব্ল্যাকলিস্ট বাদ
         active = [k for k in keys if k["status"] == "active"]
         if not active:
             return None
-        
-        # ২. প্রতিদিনের লিমিট চেক
-        # (আমরা একটি টাইমস্ট্যাম্প রিসেট লজিক রাখি — প্রতি দিন ০০:০০-এ রিসেট)
-        now = datetime.now()
-        # সহজ পদ্ধতি: প্রতিটি কী-র `used_today` ট্র্যাক করি, কিন্তু লিমিট পূর্ণ হলে বাদ দিই
         available = [k for k in active if k["used_today"] < self.cerebras_limit_rpd]
         if not available:
             return None
-        
-        # ৩. সবচেয়ে কম ব্যবহৃত কী বেছে নাও
         return min(available, key=lambda k: k["used_today"])
     
-    def _call_cerebras(self, model: str, prompt: str, key_info: Dict) -> Optional[str]:
+    def _call_cerebras(self, model: str, prompt: str, key_info: Dict, max_tokens: int) -> Optional[str]:
         """Cerebras API-তে কল করে — রেট লিমিট (৫ RPM) মেনে"""
-        # রেট লিমিট (৫ RPM → প্রতি ১২ সেকেন্ডে ১টি রিকোয়েস্ট)
         now = time.time()
         if now - self.last_request_time < 12:
             time.sleep(12 - (now - self.last_request_time))
@@ -115,7 +108,7 @@ class AIRouter:
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000,
+            "max_tokens": max_tokens,
             "temperature": 0.3
         }
         base_url = self.config.get("ai", {}).get("cerebras", {}).get("base_url", "https://api.cerebras.ai/v1/chat/completions")
@@ -139,7 +132,7 @@ class AIRouter:
             logger.error(f"❌ Cerebras connection error: {e}")
             return None
     
-    def _call_openrouter(self, model: str, prompt: str, key_info: Dict) -> Optional[str]:
+    def _call_openrouter(self, model: str, prompt: str, key_info: Dict, max_tokens: int) -> Optional[str]:
         """OpenRouter API-তে কল করে (ব্যাকআপ) — ৫০ RPD লিমিট মেনে"""
         if self.openrouter_usage_today >= self.openrouter_limit_rpd:
             logger.warning("⚠️ OpenRouter daily limit reached.")
@@ -152,7 +145,7 @@ class AIRouter:
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000
+            "max_tokens": max_tokens
         }
         base_url = self.config.get("ai", {}).get("openrouter", {}).get("base_url", "https://openrouter.ai/api/v1/chat/completions")
         
@@ -174,7 +167,6 @@ class AIRouter:
         """একটি কী ব্ল্যাকলিস্ট করে (১ ঘন্টা)"""
         unblock_time = datetime.now() + timedelta(hours=1)
         self.blacklisted_keys[key] = unblock_time
-        # কী-র স্টেটাস আপডেট
         for k in self.cerebras_keys + self.openrouter_keys:
             if k["key"] == key:
                 k["status"] = "blocked"
@@ -184,12 +176,19 @@ class AIRouter:
         """মেইন রাউটিং ফাংশন — জটিলতা অনুযায়ী প্রোভাইডার ও মডেল নির্বাচন করে"""
         complexity = self._get_complexity(task_type)
         
+        # Level 5: বড় কাজের জন্য টোকেন লিমিট বাড়ানো
+        if task_type in ["mcts_path_gen", "debate_attacker", "debate_defender", "mutator_gen",
+                         "attack_path_generation", "executive_summary_final"]:
+            max_tokens = self.max_tokens_large
+        else:
+            max_tokens = self.max_tokens_normal
+        
         # ১. Cerebras (Primary) চেষ্টা
         c_key = self._get_available_key(self.cerebras_keys)
         if c_key:
             c_model = self.config.get("ai", {}).get("cerebras", {}).get("models", {}).get(complexity, "gpt-oss-120b")
             logger.debug(f"🧠 Routing to Cerebras [{c_model}] for {task_type}")
-            result = self._call_cerebras(c_model, prompt, c_key)
+            result = self._call_cerebras(c_model, prompt, c_key, max_tokens)
             if result is not None:
                 return result
             else:
@@ -200,7 +199,7 @@ class AIRouter:
         if o_key:
             o_model = self.config.get("ai", {}).get("openrouter", {}).get("fallback_models", {}).get(complexity, "nvidia/nemotron-3-ultra")
             logger.debug(f"🔄 Fallback to OpenRouter [{o_model}]")
-            result = self._call_openrouter(o_model, prompt, o_key)
+            result = self._call_openrouter(o_model, prompt, o_key, max_tokens)
             if result is not None:
                 return result
         
