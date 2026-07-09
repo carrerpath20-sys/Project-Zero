@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zero Recon — Live Dashboard</title>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0a0a;
+    --card:#161b22;
+    --primary:#58a6ff;
+    --text:#f0f6fc;
+    --text-secondary:#8b949e;
+    --border:#30363d;
+    --green:#3fb950;
+    --red:#f85149;
+    --yellow:#d29922;
+  }
+ 
+  *{ box-sizing:border-box; margin:0; padding:0; }
+ 
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Segoe UI', monospace;
+    min-height:100vh;
+    padding:20px;
+  }
+ 
+  /* ---------- Header ---------- */
+  .header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:12px;
+    padding:16px 22px;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:10px;
+    margin-bottom:20px;
+  }
+  .header-left{ display:flex; align-items:center; gap:12px; }
+  .logo{ font-size:1.35rem; font-weight:700; letter-spacing:0.5px; }
+  .logo span{ color:var(--primary); }
+  .version-badge{
+    font-size:0.7rem;
+    padding:3px 9px;
+    border:1px solid var(--border);
+    border-radius:20px;
+    color:var(--text-secondary);
+  }
+  .header-right{ display:flex; align-items:center; gap:16px; }
+  .last-update{ font-size:0.75rem; color:var(--text-secondary); white-space:nowrap; display:flex; align-items:center; }
+ 
+  .conn-dot{
+    width:7px; height:7px; border-radius:50%;
+    background:var(--text-secondary);
+    display:inline-block;
+    margin-right:7px;
+    transition:background .3s;
+  }
+  .conn-dot.online{ background:var(--green); }
+  .conn-dot.offline{ background:var(--red); }
+ 
+  .status-badge{
+    padding:5px 14px;
+    border-radius:20px;
+    font-size:0.72rem;
+    font-weight:700;
+    letter-spacing:0.6px;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    white-space:nowrap;
+  }
+  .status-running{ background:rgba(88,166,255,0.14); color:var(--primary); border:1px solid rgba(88,166,255,0.4); }
+  .status-completed{ background:rgba(63,185,80,0.14); color:var(--green); border:1px solid rgba(63,185,80,0.4); }
+  .status-failed{ background:rgba(248,81,73,0.14); color:var(--red); border:1px solid rgba(248,81,73,0.4); }
+ 
+  .pulse-dot{
+    width:7px; height:7px; border-radius:50%;
+    background:currentColor;
+    animation:pulseDot 1.4s ease-in-out infinite;
+  }
+  @keyframes pulseDot{ 0%,100%{ opacity:1; } 50%{ opacity:0.25; } }
+ 
+  /* ---------- Stat cards ---------- */
+  .stats-grid{
+    display:grid;
+    grid-template-columns:repeat(5, 1fr);
+    gap:16px;
+    margin-bottom:20px;
+  }
+  .stat-card{
+    position:relative;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:18px 20px;
+    overflow:hidden;
+  }
+  .stat-card.glow::after{
+    content:'';
+    position:absolute; inset:0;
+    border-radius:10px;
+    box-shadow:0 0 0 0 rgba(88,166,255,0.35);
+    animation:cardGlow 2.2s ease-out infinite;
+    pointer-events:none;
+  }
+  @keyframes cardGlow{
+    0%{ box-shadow:0 0 0 0 rgba(88,166,255,0.3); }
+    70%{ box-shadow:0 0 0 10px rgba(88,166,255,0); }
+    100%{ box-shadow:0 0 0 0 rgba(88,166,255,0); }
+  }
+  .stat-label{
+    font-size:0.7rem;
+    color:var(--text-secondary);
+    text-transform:uppercase;
+    letter-spacing:0.7px;
+    margin-bottom:8px;
+  }
+  .stat-value{ font-size:1.55rem; font-weight:700; word-break:break-all; }
+  .progress-track{
+    height:5px;
+    background:#0d1117;
+    border-radius:3px;
+    margin-top:10px;
+    overflow:hidden;
+  }
+  .progress-fill{
+    height:100%;
+    background:var(--primary);
+    border-radius:3px;
+    width:0%;
+    transition:width 0.4s ease;
+  }
+ 
+  .mini-spark{ width:100%; height:26px; margin-top:8px; display:block; }
+  .mini-spark polyline{ fill:none; stroke:var(--primary); stroke-width:1.5; }
+ 
+  .stepper{ display:flex; flex-wrap:wrap; gap:4px; margin-top:10px; }
+  .step-dot{ width:9px; height:9px; border-radius:2px; background:#21262d; flex-shrink:0; }
+  .step-dot.done{ background:var(--primary); opacity:0.55; }
+  .step-dot.current{
+    background:var(--primary);
+    box-shadow:0 0 0 3px rgba(88,166,255,0.25);
+    animation:stepPulse 1.4s infinite;
+  }
+  @keyframes stepPulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.4; } }
+ 
+  /* ---------- Main two-column layout ---------- */
+  .main-grid{
+    display:grid;
+    grid-template-columns:1.1fr 0.9fr;
+    gap:20px;
+    align-items:start;
+  }
+ 
+  .panel{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:18px 20px;
+    margin-bottom:20px;
+  }
+  .panel-title{
+    font-size:0.8rem;
+    font-weight:700;
+    color:var(--text-secondary);
+    text-transform:uppercase;
+    letter-spacing:0.7px;
+    margin-bottom:14px;
+    padding-bottom:10px;
+    border-bottom:1px solid var(--border);
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+  }
+  .log-count{ font-size:0.68rem; color:var(--text-secondary); font-weight:400; text-transform:none; letter-spacing:0; }
+ 
+  .detail-row{
+    display:flex;
+    justify-content:space-between;
+    gap:10px;
+    padding:7px 0;
+    font-size:0.85rem;
+    border-bottom:1px dashed var(--border);
+  }
+  .detail-row:last-child{ border-bottom:none; }
+  .detail-label{ color:var(--text-secondary); }
+  .detail-row span:last-child{ text-align:right; word-break:break-all; }
+ 
+  .verdict-badge{ font-weight:700; font-size:0.78rem; letter-spacing:0.4px; }
+  .flaw-count{
+    font-size:0.65rem;
+    background:rgba(248,81,73,0.15);
+    color:var(--red);
+    padding:1px 7px;
+    border-radius:10px;
+    margin-left:8px;
+    font-weight:700;
+    display:none;
+  }
+  .flaws-list{ margin-top:8px; padding-left:18px; font-size:0.78rem; color:var(--yellow); }
+  .flaws-list li{ margin-bottom:3px; }
+ 
+  .reports-table{ width:100%; border-collapse:collapse; font-size:0.8rem; }
+  .reports-table th{
+    text-align:left;
+    color:var(--text-secondary);
+    font-weight:600;
+    padding:6px 4px;
+    border-bottom:1px solid var(--border);
+    font-size:0.72rem;
+    text-transform:uppercase;
+    letter-spacing:0.4px;
+  }
+  .reports-table td{
+    padding:7px 4px;
+    border-bottom:1px solid #21262d;
+    color:var(--text);
+  }
+  .reports-table tr:last-child td{ border-bottom:none; }
+ 
+  /* ---------- Live logs ---------- */
+  .logs-panel{ height:100%; display:flex; flex-direction:column; }
+  .log-toolbar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+  .filter-btn{
+    background:transparent;
+    border:1px solid var(--border);
+    color:var(--text-secondary);
+    font-size:0.68rem;
+    padding:4px 10px;
+    border-radius:20px;
+    cursor:pointer;
+    font-family:inherit;
+    letter-spacing:0.4px;
+  }
+  .filter-btn.active{ background:rgba(88,166,255,0.15); border-color:var(--primary); color:var(--primary); }
+  .log-search{
+    background:#0d1117;
+    border:1px solid var(--border);
+    color:var(--text);
+    font-size:0.75rem;
+    padding:5px 10px;
+    border-radius:6px;
+    font-family:inherit;
+    flex:1;
+    min-width:120px;
+  }
+  .log-search:focus{ outline:none; border-color:var(--primary); }
+ 
+  .logs-wrap{ position:relative; }
+  .logs-box{
+    background:#010409;
+    border:1px solid var(--border);
+    border-radius:8px;
+    height:480px;
+    overflow-y:auto;
+    padding:12px 14px;
+    font-family:'Consolas','Segoe UI', monospace;
+    font-size:0.78rem;
+    line-height:1.55;
+ 
+    scrollbar-width:thin;
+    scrollbar-color:#30363d #010409;
+  }
+  .logs-box::-webkit-scrollbar{ width:8px; }
+  .logs-box::-webkit-scrollbar-track{ background:#010409; }
+  .logs-box::-webkit-scrollbar-thumb{ background:#30363d; border-radius:4px; }
+  .logs-box::-webkit-scrollbar-thumb:hover{ background:#484f58; }
+ 
+  .log-line{ white-space:pre-wrap; word-break:break-word; margin-bottom:2px; }
+  .log-ts{ color:var(--text-secondary); opacity:0.75; margin-right:6px; }
+  .log-info{ color:var(--text); }
+  .log-warning{ color:var(--yellow); }
+  .log-error{ color:var(--red); }
+ 
+  .jump-btn{
+    position:absolute;
+    bottom:14px; right:14px;
+    background:var(--primary);
+    color:#0a0a0a;
+    border:none;
+    padding:6px 14px;
+    border-radius:20px;
+    font-size:0.72rem;
+    font-weight:700;
+    cursor:pointer;
+    display:none;
+    box-shadow:0 2px 10px rgba(0,0,0,0.4);
+    font-family:inherit;
+  }
+ 
+  .empty-state{
+    color:var(--text-secondary);
+    font-style:italic;
+    text-align:center;
+    padding:24px 10px;
+  }
+ 
+  .footer{
+    margin-top:6px;
+    text-align:center;
+    font-size:0.75rem;
+    color:var(--text-secondary);
+    padding:14px;
+  }
+ 
+  @media (max-width:1100px){
+    .stats-grid{ grid-template-columns:repeat(3, 1fr); }
+  }
+  @media (max-width:900px){
+    .main-grid{ grid-template-columns:1fr; }
+    .logs-box{ height:360px; }
+  }
+  @media (max-width:700px){
+    .stats-grid{ grid-template-columns:repeat(2, 1fr); }
+  }
+  @media (max-width:480px){
+    body{ padding:12px; }
+    .stats-grid{ grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+ 
+  <div class="header">
+    <div class="header-left">
+      <div class="logo">⚡ ZERO<span>RECON</span></div>
+      <div class="version-badge">LEVEL 5</div>
+    </div>
+    <div class="header-right">
+      <div class="last-update">
+        <span class="conn-dot" id="connDot"></span>
+        <span id="lastUpdateText">Connecting to server...</span>
+      </div>
+      <div class="status-badge status-running" id="statusBadge">
+        <span class="pulse-dot"></span>
+        <span id="statusText">CONNECTING</span>
+      </div>
+    </div>
+  </div>
+ 
+  <div class="stats-grid">
+    <div class="stat-card glow">
+      <div class="stat-label">Target Domain</div>
+      <div class="stat-value" id="targetValue">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Current Phase</div>
+      <div class="stat-value" id="phaseValue">—</div>
+      <div class="progress-track"><div class="progress-fill" id="phaseBar"></div></div>
+      <div class="stepper" id="phaseStepper"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">CPU Usage</div>
+      <div class="stat-value" id="cpuValue">—</div>
+      <div class="progress-track"><div class="progress-fill" id="cpuBar"></div></div>
+      <svg class="mini-spark" id="cpuSpark" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Memory Usage</div>
+      <div class="stat-value" id="memValue">—</div>
+      <div class="progress-track"><div class="progress-fill" id="memBar"></div></div>
+      <svg class="mini-spark" id="memSpark" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Disk Usage</div>
+      <div class="stat-value" id="diskValue">—</div>
+      <div class="progress-track"><div class="progress-fill" id="diskBar"></div></div>
+      <svg class="mini-spark" id="diskSpark" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
+    </div>
+  </div>
+ 
+  <div class="main-grid">
+    <div class="left-col">
+      <div class="panel">
+        <div class="panel-title">Session Details</div>
+        <div class="detail-row"><span class="detail-label">Session ID</span><span id="sessionId">—</span></div>
+        <div class="detail-row"><span class="detail-label">Start Time</span><span id="startTime">—</span></div>
+        <div class="detail-row"><span class="detail-label">Elapsed Time</span><span id="elapsedTime">—</span></div>
+        <div class="detail-row"><span class="detail-label">Completed Phases</span><span id="completedPhases">—</span></div>
+      </div>
+ 
+      <div class="panel">
+        <div class="panel-title">Evo-Delta Metadata</div>
+        <div class="detail-row"><span class="detail-label">MCTS Selected</span><span id="mctsSelected">—</span></div>
+        <div class="detail-row" id="dnaRow" style="display:none;"><span class="detail-label">DNA Signature</span><span id="dnaValue">—</span></div>
+        <div class="detail-row">
+          <span class="detail-label">Debate Verdict</span>
+          <span><span class="verdict-badge" id="debateVerdict">—</span><span class="flaw-count" id="flawCount"></span></span>
+        </div>
+        <ul class="flaws-list" id="debateFlaws"></ul>
+      </div>
+ 
+      <div class="panel">
+        <div class="panel-title">Recent Reports</div>
+        <table class="reports-table">
+          <thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead>
+          <tbody id="reportsBody">
+            <tr><td colspan="3" class="empty-state">Waiting for data...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+ 
+    <div class="right-col">
+      <div class="panel logs-panel">
+        <div class="panel-title">Live Logs <span class="log-count" id="logCount"></span></div>
+        <div class="log-toolbar">
+          <button class="filter-btn active" data-level="all">ALL</button>
+          <button class="filter-btn" data-level="info">INFO</button>
+          <button class="filter-btn" data-level="warning">WARN</button>
+          <button class="filter-btn" data-level="error">ERROR</button>
+          <input type="text" class="log-search" id="logSearch" placeholder="Search logs...">
+        </div>
+        <div class="logs-wrap">
+          <div class="logs-box" id="logsBox">
+            <div class="empty-state">Connecting to server...</div>
+          </div>
+          <button class="jump-btn" id="jumpBtn">↓ New logs</button>
+        </div>
+      </div>
+    </div>
+  </div>
+ 
+  <div class="footer">Zero Recon Dashboard · Auto-refresh every 2s</div>
+ 
+<script>
+(function () {
+  const socket = io();
+  const el = (id) => document.getElementById(id);
+ 
+  // ---- state ----
+  let lastLogCount = 0;
+  let allLogs = [];
+  let currentLevel = 'all';
+  let currentSearch = '';
+  let autoFollow = true;
+  let pendingNewCount = 0;
+  let sessionStartTime = null;
+ 
+  let cpuHistory = [];
+  let memHistory = [];
+  let diskHistory = [];
+  const HISTORY_MAX = 30;
+  const LOGS_MAX = 1000;
+ 
+  function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+ 
+  // ---- connection state ----
+  function setConnected(isOnline) {
+    el('connDot').className = 'conn-dot ' + (isOnline ? 'online' : 'offline');
+    if (!isOnline) el('lastUpdateText').textContent = 'Disconnected — retrying...';
+  }
+  socket.on('connect', () => setConnected(true));
+  socket.on('disconnect', () => setConnected(false));
+ 
+  socket.on('status_update', (data) => {
+    setConnected(true);
+    render(data);
+  });
+ 
+  function render(data) {
+    if (data.session) renderSession(data.session);
+    if (data.stats) renderStats(data.stats);
+    if (data.logs) renderLogs(data.logs);
+    if (data.reports) renderReports(data.reports);
+    if (data.timestamp) {
+      el('lastUpdateText').textContent = 'Last update: ' + new Date(data.timestamp).toLocaleTimeString();
+    }
+  }
+ 
+  // ---- session / phase stepper / evo meta ----
+  function renderSession(session) {
+    el('targetValue').textContent = session.target || '—';
+    el('sessionId').textContent = session.session_id || '—';
+    el('startTime').textContent = session.start_time ? new Date(session.start_time).toLocaleString() : '—';
+    sessionStartTime = session.start_time ? new Date(session.start_time) : null;
+ 
+    const phases = session.phases || [];
+    const completed = session.completed_phases || [];
+    const total = phases.length;
+    const current = session.current_phase ?? 0;
+ 
+    el('phaseValue').textContent = total ? `${current}/${total}` : '—';
+    el('phaseBar').style.width = total ? `${Math.min(100, (current / total) * 100)}%` : '0%';
+    el('completedPhases').textContent = `${completed.length} / ${total || '—'}`;
+    renderStepper(phases, completed, current);
+ 
+    const status = (session.status || 'running').toLowerCase();
+    const validStatus = ['running', 'completed', 'failed'].includes(status) ? status : 'running';
+    el('statusBadge').className = 'status-badge status-' + validStatus;
+    el('statusText').textContent = status.toUpperCase();
+ 
+    if (session.evo_meta) {
+      const meta = session.evo_meta;
+      el('mctsSelected').textContent = meta.mcts_selected || '—';
+ 
+      if (meta.dna) {
+        el('dnaRow').style.display = 'flex';
+        el('dnaValue').textContent = meta.dna;
+      } else {
+        el('dnaRow').style.display = 'none';
+      }
+ 
+      const verdict = (meta.debate_verdict || '').toUpperCase();
+      const verdictEl = el('debateVerdict');
+      verdictEl.textContent = verdict || '—';
+      verdictEl.style.color = verdict === 'APPROVED' ? 'var(--green)'
+        : verdict === 'BLOCKED' ? 'var(--red)'
+        : 'var(--text)';
+ 
+      const flaws = meta.debate_flaws || [];
+      const flawCountEl = el('flawCount');
+      if (flaws.length) {
+        flawCountEl.textContent = `⚠ ${flaws.length}`;
+        flawCountEl.style.display = 'inline-block';
+      } else {
+        flawCountEl.style.display = 'none';
+      }
+ 
+      const flawsList = el('debateFlaws');
+      flawsList.innerHTML = '';
+      flaws.forEach((flaw) => {
+        const li = document.createElement('li');
+        li.textContent = flaw;
+        flawsList.appendChild(li);
+      });
+    }
+  }
+ 
+  function renderStepper(phases, completedPhases, currentPhase) {
+    const container = el('phaseStepper');
+    container.innerHTML = '';
+    const completedSet = new Set(completedPhases);
+    phases.forEach((p) => {
+      const dot = document.createElement('div');
+      dot.className = 'step-dot';
+      if (p === currentPhase) {
+        dot.classList.add('current');
+        dot.title = `Phase ${p} (current)`;
+      } else if (completedSet.has(p)) {
+        dot.classList.add('done');
+        dot.title = `Phase ${p} (done)`;
+      } else {
+        dot.title = `Phase ${p} (pending)`;
+      }
+      container.appendChild(dot);
+    });
+  }
+ 
+  // ---- elapsed time ticker ----
+  function updateElapsed() {
+    if (!sessionStartTime) {
+      el('elapsedTime').textContent = '—';
+      return;
+    }
+    const diffSec = Math.max(0, Math.floor((Date.now() - sessionStartTime.getTime()) / 1000));
+    const hh = String(Math.floor(diffSec / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((diffSec % 3600) / 60)).padStart(2, '0');
+    const ss = String(diffSec % 60).padStart(2, '0');
+    el('elapsedTime').textContent = `${hh}:${mm}:${ss}`;
+  }
+  setInterval(updateElapsed, 1000);
+ 
+  // ---- stats + sparklines ----
+  function pushHistory(arr, value) {
+    arr.push(value);
+    if (arr.length > HISTORY_MAX) arr.shift();
+    return arr;
+  }
+ 
+  function updateSpark(svgId, history) {
+    const svg = el(svgId);
+    if (history.length < 2) {
+      svg.innerHTML = '';
+      return;
+    }
+    const w = 100, h = 30;
+    const step = w / (history.length - 1);
+    const points = history
+      .map((v, i) => `${(i * step).toFixed(1)},${(h - (Math.max(0, Math.min(100, v)) / 100 * h)).toFixed(1)}`)
+      .join(' ');
+    svg.innerHTML = `<polyline points="${points}"></polyline>`;
+  }
+ 
+  function renderStats(stats) {
+    const cpu = stats.cpu ?? null;
+    const mem = stats.memory_percent ?? null;
+    const disk = stats.disk_percent ?? null;
+ 
+    el('cpuValue').textContent = cpu != null ? cpu.toFixed(1) + '%' : '—';
+    el('cpuBar').style.width = (cpu || 0) + '%';
+    el('memValue').textContent = mem != null ? mem.toFixed(1) + '%' : '—';
+    el('memBar').style.width = (mem || 0) + '%';
+    el('diskValue').textContent = disk != null ? disk.toFixed(1) + '%' : '—';
+    el('diskBar').style.width = (disk || 0) + '%';
+ 
+    if (cpu != null) updateSpark('cpuSpark', pushHistory(cpuHistory, cpu));
+    if (mem != null) updateSpark('memSpark', pushHistory(memHistory, mem));
+    if (disk != null) updateSpark('diskSpark', pushHistory(diskHistory, disk));
+  }
+ 
+  // ---- logs: level detection, filtering, incremental append, auto-scroll pause ----
+  function levelOf(line) {
+    if (/\bERROR\b/.test(line)) return 'error';
+    if (/\bWARNING\b/.test(line)) return 'warning';
+    return 'info';
+  }
+ 
+  function passesFilter(line) {
+    const lvl = levelOf(line);
+    if (currentLevel !== 'all' && lvl !== currentLevel) return false;
+    if (currentSearch && !line.toLowerCase().includes(currentSearch.toLowerCase())) return false;
+    return true;
+  }
+ 
+  function formatLogLine(line) {
+    const match = line.match(/^(\[.*?\])\s*(.*)$/);
+    const ts = match ? match[1] : '';
+    const rest = match ? match[2] : line;
+    const levelClass = 'log-' + levelOf(rest);
+    return `<div class="log-line"><span class="log-ts">${escapeHtml(ts)}</span><span class="${levelClass}">${escapeHtml(rest)}</span></div>`;
+  }
+ 
+  function updateLogCount() {
+    const visible = allLogs.filter(passesFilter).length;
+    el('logCount').textContent = allLogs.length ? `· ${visible}/${allLogs.length} lines` : '';
+  }
+ 
+  function rebuildLogsBox() {
+    const box = el('logsBox');
+    const filtered = allLogs.filter(passesFilter);
+    box.innerHTML = filtered.length
+      ? filtered.map(formatLogLine).join('')
+      : `<div class="empty-state">${allLogs.length ? 'No matching logs' : 'Connecting to server...'}</div>`;
+    autoFollow = true;
+    pendingNewCount = 0;
+    el('jumpBtn').style.display = 'none';
+    box.scrollTop = box.scrollHeight;
+    updateLogCount();
+  }
+ 
+  function renderLogs(logs) {
+    const box = el('logsBox');
+    let delta;
+ 
+    if (logs.length < allLogs.length) {
+      // upstream log list was reset/truncated -> full rebuild
+      allLogs = logs.slice();
+      rebuildLogsBox();
+      return;
+    }
+ 
+    delta = logs.slice(allLogs.length);
+    allLogs = allLogs.concat(delta);
+    if (allLogs.length > LOGS_MAX) allLogs = allLogs.slice(allLogs.length - LOGS_MAX);
+ 
+    if (!delta.length) return;
+ 
+    if (box.querySelector('.empty-state')) box.innerHTML = '';
+ 
+    const passing = delta.filter(passesFilter);
+    if (passing.length) {
+      box.insertAdjacentHTML('beforeend', passing.map(formatLogLine).join(''));
+      if (autoFollow) {
+        box.scrollTop = box.scrollHeight;
+      } else {
+        pendingNewCount += passing.length;
+        el('jumpBtn').style.display = 'block';
+        el('jumpBtn').textContent = `↓ New logs (${pendingNewCount})`;
+      }
+    }
+    updateLogCount();
+  }
+ 
+  document.querySelectorAll('.filter-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filter-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentLevel = btn.dataset.level;
+      rebuildLogsBox();
+    });
+  });
+ 
+  el('logSearch').addEventListener('input', (e) => {
+    currentSearch = e.target.value.trim();
+    rebuildLogsBox();
+  });
+ 
+  el('jumpBtn').addEventListener('click', () => {
+    const box = el('logsBox');
+    box.scrollTop = box.scrollHeight;
+    autoFollow = true;
+    pendingNewCount = 0;
+    el('jumpBtn').style.display = 'none';
+  });
+ 
+  el('logsBox').addEventListener('scroll', () => {
+    const box = el('logsBox');
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    if (atBottom) {
+      autoFollow = true;
+      pendingNewCount = 0;
+      el('jumpBtn').style.display = 'none';
+    } else {
+      autoFollow = false;
+    }
+  });
+ 
+  // ---- reports ----
+  function formatBytes(bytes) {
+    if (bytes == null) return '—';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+ 
+  function formatRelativeTime(dateStr) {
+    const diffSec = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+    if (diffSec < 10) return 'just now';
+    if (diffSec < 60) return `${diffSec}s ago`;
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    return new Date(dateStr).toLocaleDateString();
+  }
+ 
+  function renderReports(reports) {
+    const body = el('reportsBody');
+    if (!reports.length) {
+      body.innerHTML = '<tr><td colspan="3" class="empty-state">No reports yet</td></tr>';
+      return;
+    }
+    const sorted = [...reports]
+      .sort((a, b) => new Date(b.modified) - new Date(a.modified))
+      .slice(0, 5);
+ 
+    body.innerHTML = sorted.map((r) => `
+      <tr>
+        <td>📄 ${escapeHtml(r.name)}</td>
+        <td>${formatBytes(r.size)}</td>
+        <td title="${new Date(r.modified).toLocaleString()}">${formatRelativeTime(r.modified)}</td>
+      </tr>
+    `).join('');
+  }
+})();
+</script>
+ 
+</body>
+</html>
