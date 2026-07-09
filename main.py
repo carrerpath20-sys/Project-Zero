@@ -14,10 +14,20 @@ import sys
 import os
 import argparse
 import logging
-import yaml
 import subprocess
 from pathlib import Path
 from datetime import datetime
+
+# =====================================================================
+#  ডায়নামিক ইম্পোর্ট — `yaml` না থাকলে অটো-ইনস্টল ট্রিগার করবে
+# =====================================================================
+try:
+    import yaml
+except ImportError:
+    print("[WARNING] PyYAML not installed. Attempting auto-install...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyyaml"])
+    import yaml
+    print("[INFO] PyYAML installed successfully.")
 
 # =====================================================================
 #  লগার সেটআপ
@@ -34,7 +44,6 @@ def setup_logging(verbose: bool = False):
         handlers=[logging.StreamHandler(sys.stdout)]
     )
     
-    # ফাইল হ্যান্ডলার
     log_dir = Path("outputs/logs")
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -47,7 +56,46 @@ def setup_logging(verbose: bool = False):
     return logging.getLogger("ZeroRecon")
 
 # =====================================================================
-#  কনফিগ লোডার
+#  অটো-ইনস্টল ফাংশন (Python ডিপেন্ডেন্সি + এক্সটার্নাল টুলস)
+# =====================================================================
+def run_auto_install():
+    """Python dependencies + external tools (massdns/subfinder) install."""
+    logger = logging.getLogger("ZeroRecon")
+    logger.info("📦 Auto-install mode activated. Installing dependencies...")
+
+    # 1. Python Dependencies
+    req_file = Path("requirements.txt")
+    if req_file.exists():
+        logger.info("📦 Installing Python dependencies from requirements.txt...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+            logger.info("✅ Python dependencies installed successfully.")
+        except Exception as e:
+            logger.error(f"❌ Failed to install Python dependencies: {e}")
+            logger.warning("⚠️ Continuing anyway, but some features may not work.")
+    else:
+        logger.warning("⚠️ requirements.txt not found. Skipping Python dependency install.")
+
+    # 2. External Tools (massdns, subfinder)
+    try:
+        from tools.installer import ensure_tool
+        tools = ["massdns", "subfinder"]
+        for tool in tools:
+            logger.info(f"🔧 Checking/Installing {tool}...")
+            path = ensure_tool(tool, auto_install=True)
+            if path:
+                logger.info(f"✅ {tool} ready at: {path}")
+            else:
+                logger.warning(f"⚠️ {tool} not available. Falling back to Python fallback.")
+    except ImportError:
+        logger.warning("⚠️ tools.installer module not found. Skipping external tool install.")
+    except Exception as e:
+        logger.error(f"❌ External tool install error: {e}")
+
+    logger.info("✅ Auto-install phase complete.")
+
+# =====================================================================
+#  কনফিগ লোডার (UTF-8 ফিক্স সহ)
 # =====================================================================
 def load_config(config_path: str = "config.yaml") -> dict:
     if not Path(config_path).exists():
@@ -80,10 +128,11 @@ def load_config(config_path: str = "config.yaml") -> dict:
                 "adversarial_debate": {"enabled": False}
             }
         }
-        with open(config_path, 'w') as f:
+        with open(config_path, 'w', encoding='utf-8') as f:
             yaml.dump(default_config, f, default_flow_style=False, indent=2)
         return default_config
-    with open(config_path, 'r') as f:
+    
+    with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
 # =====================================================================
@@ -95,13 +144,8 @@ def main():
         epilog="Example: python main.py example.com --god-mode --verbose"
     )
     
-    # টার্গেট
     parser.add_argument("target", help="Target domain (e.g., example.com)")
-    
-    # কনফিগ
     parser.add_argument("--config", "-c", default="config.yaml", help="Path to config file")
-    
-    # অপশন
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument("--auto-install", "-a", action="store_true", help="Auto-install missing tools")
     parser.add_argument("--resume", "-r", help="Resume from a previous session ID")
@@ -109,40 +153,29 @@ def main():
     parser.add_argument("--output", "-o", default="outputs", help="Output directory")
     parser.add_argument("--all", action="store_true", help="Run all phases (1-15)")
     
-    # ================================================================
-    #  Level 5 এক্সক্লুসিভ ফ্ল্যাগ
-    # ================================================================
-    parser.add_argument(
-        "--god-mode", 
-        action="store_true", 
-        help="Enable all Evo engines (MCTS, Symbolic, Mutator, Reflector) for maximum intelligence"
-    )
-    parser.add_argument(
-        "--aggressive-debate", 
-        action="store_true", 
-        help="Enable Adversarial Multi-Agent Debate (WAF bypass validation) — increases API calls by ~2"
-    )
-    parser.add_argument(
-        "--dashboard", 
-        action="store_true", 
-        help="Start the live Flask/SocketIO dashboard (requires dashboard/ folder)"
-    )
+    parser.add_argument("--god-mode", action="store_true", help="Enable all Evo engines (MCTS, Symbolic, Mutator, Reflector)")
+    parser.add_argument("--aggressive-debate", action="store_true", help="Enable Adversarial Multi-Agent Debate")
+    parser.add_argument("--dashboard", action="store_true", help="Start the live Flask/SocketIO dashboard")
     
     args = parser.parse_args()
     logger = setup_logging(args.verbose)
     
     # ================================================================
-    #  ড্যাশবোর্ড চালানোর লজিক (যদি ফ্ল্যাগ দেওয়া হয়)
+    #  অটো-ইনস্টল চালান (যদি ফ্ল্যাগ দেওয়া থাকে)
+    # ================================================================
+    if args.auto_install:
+        run_auto_install()
+    
+    # ================================================================
+    #  ড্যাশবোর্ড চালান (যদি ফ্ল্যাগ দেওয়া থাকে)
     # ================================================================
     if args.dashboard:
         logger.info("🌐 Launching Zero Recon Dashboard...")
         try:
-            # ড্যাশবোর্ডটি আলাদা প্রক্রিয়ায় চালু করি
             subprocess.Popen([sys.executable, "-m", "dashboard.app"])
             logger.info("✅ Dashboard started at http://localhost:5000")
         except Exception as e:
-            logger.error(f"❌ Failed to start dashboard: {e}. Make sure dashboard/ folder exists.")
-        # ড্যাশবোর্ড চালানোর পরও মূল স্ক্যান চালানো হবে (ব্যাকগ্রাউন্ডে ড্যাশবোর্ড চলবে)
+            logger.error(f"❌ Failed to start dashboard: {e}")
     
     # ================================================================
     #  কনফিগ লোড
@@ -168,17 +201,14 @@ def main():
         config["evo"] = config.get("evo", {})
         config["evo"]["mcts"] = {"enabled": True, "max_paths": 3}
         config["evo"]["neuro_symbolic"] = {"enabled": True, "max_depth": 5}
-        # Mutator ও Reflector ডিফল্ট ইভোতে থাকে, আমরা নিশ্চিত করি
         config["evo"]["mutator"] = {"enabled": True}
         config["evo"]["reflector"] = {"enabled": True}
-        # DNA ও Profiler ইতিমধ্যেই ডিফল্ট
-
+    
     if args.aggressive_debate:
         logger.info("⚖️ AGGRESSIVE DEBATE ENABLED: Activating Attacker vs Defender validation")
         config["evo"] = config.get("evo", {})
         config["evo"]["adversarial_debate"] = {"enabled": True, "rounds": 3, "temperature": 0.5}
     
-    # --all ফ্ল্যাগ হ্যান্ডেল (যদি --phases না দেওয়া থাকে)
     if args.all:
         args.phases = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
         logger.info("🎯 Running ALL 15 phases.")
@@ -198,15 +228,12 @@ def main():
         
         supervisor = SupervisorOrchestrator(
             target=args.target,
-            config=config,  # ইনজেক্টেড কনফিগ
+            config=config,
             auto_install=args.auto_install,
             resume_session=args.resume,
             phases_to_run=args.phases
         )
         
-        # ================================================================
-        #  মিশন শুরু
-        # ================================================================
         logger.info("🔥 Starting reconnaissance mission...")
         results = supervisor.run()
         
