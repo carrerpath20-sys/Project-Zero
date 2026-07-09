@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DNA — Local Vector Weight Matrix for Evolutionary Learning.
-Stores successful patterns as embedding vectors (NumPy) and metadata.
-Provides similarity search and incremental updates.
+DNA — Persistent Vector Memory using ChromaDB + Sentence-Transformers.
+Stores successful reconnaissance patterns as embeddings.
+Provides fast similarity search and incremental learning.
 """
 
 import os
@@ -17,104 +17,126 @@ logger = logging.getLogger("ZeroRecon")
 
 class DNA:
     """
-    The DNA is a lightweight, compressed database of learned patterns.
-    It stores vectors (successful reconnaissance patterns) and metadata.
+    Level 5 DNA: Uses ChromaDB for persistent storage and SBERT for embeddings.
+    Falls back to NumPy if ChromaDB is not installed.
     """
     def __init__(self, state_dir: Path = Path("state/dna"), embedding_dim: int = 384):
         self.state_dir = Path(state_dir)
         self.embedding_dim = embedding_dim
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.weights_file = self.state_dir / "weights.npy"
-        self.meta_file = self.state_dir / "meta.json"
-        self.meta: Dict[str, Any] = {}
-        self.weights: Optional[np.ndarray] = None
-        self._load()
+        
+        # Try loading ChromaDB
+        self.chroma = None
+        self.sbert = None
+        self._use_chroma = False
+        self._init_backend()
 
-    def _load(self) -> None:
-        """Load weights and metadata from disk. Create if missing."""
+    def _init_backend(self):
+        """Initialize either ChromaDB or fallback to NumPy."""
         try:
-            if self.weights_file.exists() and self.meta_file.exists():
-                self.weights = np.load(self.weights_file)
-                with open(self.meta_file, 'r') as f:
-                    self.meta = json.load(f)
-                logger.info(f"🧬 DNA loaded: {self.weights.shape[0]} vectors, dim {self.weights.shape[1]}")
-            else:
-                # Initialize empty DNA
-                self.weights = np.empty((0, self.embedding_dim), dtype=np.float32)
-                self.meta = {"entries": [], "version": "2.0"}
-                self._save()
-                logger.info("🧬 New DNA initialized.")
-        except Exception as e:
-            logger.error(f"❌ DNA load failed: {e}. Re-initializing.")
+            import chromadb
+            from chromadb.config import Settings
+            self.chroma = chromadb.Client(Settings(
+                chroma_db_impl="duckdb+parquet",
+                persist_directory=str(self.state_dir)
+            ))
+            self._use_chroma = True
+            logger.info("🧬 DNA using ChromaDB (persistent vector DB).")
+            # Create collection if not exists
+            self.collection = self.chroma.get_or_create_collection(
+                name="dna_patterns",
+                metadata={"hnsw:space": "cosine"}
+            )
+            # Try loading SBERT for embeddings
+            try:
+                from sentence_transformers import SentenceTransformer
+                self.sbert = SentenceTransformer('all-MiniLM-L6-v2')
+                logger.info("🧬 SBERT loaded for embeddings.")
+            except ImportError:
+                logger.warning("⚠️ Sentence-Transformers not installed. Using random embeddings.")
+        except ImportError:
+            logger.warning("⚠️ ChromaDB not installed. Falling back to NumPy in-memory.")
+            self._use_chroma = False
             self.weights = np.empty((0, self.embedding_dim), dtype=np.float32)
-            self.meta = {"entries": [], "version": "2.0"}
-            self._save()
+            self.meta = {"entries": []}
 
-    def _save(self) -> None:
-        """Save weights and metadata to disk atomically."""
-        try:
-            # Atomic write: temp then rename
-            temp_weight = self.weights_file.with_suffix(".tmp.npy")
-            np.save(temp_weight, self.weights)
-            temp_weight.rename(self.weights_file)
-            
-            temp_meta = self.meta_file.with_suffix(".tmp.json")
-            with open(temp_meta, 'w') as f:
-                json.dump(self.meta, f, indent=2)
-            temp_meta.rename(self.meta_file)
-        except Exception as e:
-            logger.error(f"❌ DNA save failed: {e}")
+    def _embed(self, text: str) -> np.ndarray:
+        """Generate embedding vector from text using SBERT or fallback."""
+        if self.sbert:
+            try:
+                return self.sbert.encode(text, normalize_embeddings=True)
+            except:
+                pass
+        # Fallback: random deterministic embedding
+        np.random.seed(hash(text) % 2**32)
+        return np.random.randn(self.embedding_dim)
 
-    def add_pattern(self, vector: np.ndarray, metadata: Dict[str, Any]) -> None:
+    def add_pattern(self, text: str, metadata: Dict[str, Any]) -> None:
         """
-        Add a new pattern vector (embedding) to the DNA with metadata.
+        Add a new pattern to the DNA (text + metadata).
         """
-        if vector.shape[0] != self.embedding_dim:
-            raise ValueError(f"Vector dim {vector.shape[0]} != {self.embedding_dim}")
-        self.weights = np.vstack([self.weights, vector.reshape(1, -1)])
-        self.meta["entries"].append({
-            "index": len(self.meta["entries"]),
-            "timestamp": metadata.get("timestamp", ""),
-            "target": metadata.get("target", ""),
-            "success": metadata.get("success", False),
-            "pattern": metadata.get("pattern", "")
-        })
-        self._save()
-        logger.info(f"🧬 Pattern added to DNA (total: {self.weights.shape[0]})")
+        vector = self._embed(text)
+        if self._use_chroma and self.chroma:
+            try:
+                self.collection.add(
+                    embeddings=[vector.tolist()],
+                    documents=[text],
+                    metadatas=[metadata],
+                    ids=[f"{metadata.get('target', 'unknown')}_{len(self.collection.get()['ids'])}"]
+                )
+                logger.info(f"🧬 Pattern added to ChromaDB.")
+            except Exception as e:
+                logger.error(f"❌ ChromaDB add failed: {e}")
+        else:
+            # NumPy fallback
+            self.weights = np.vstack([self.weights, vector.reshape(1, -1)])
+            self.meta["entries"].append(metadata)
+            logger.info(f"🧬 Pattern added to NumPy DNA (total: {self.weights.shape[0]})")
 
-    def get_similarity(self, vector: np.ndarray) -> List[Tuple[int, float]]:
+    def get_similarity(self, text: str, top_k: int = 5) -> List[Dict]:
         """
-        Compute cosine similarity between input vector and all stored vectors.
-        Returns list of (index, similarity) sorted descending.
+        Search for similar patterns in the DNA.
+        Returns list of metadata with similarity scores.
         """
+        vector = self._embed(text)
+        if self._use_chroma and self.chroma:
+            try:
+                results = self.collection.query(
+                    query_embeddings=[vector.tolist()],
+                    n_results=top_k,
+                    include=["metadatas", "documents", "distances"]
+                )
+                if results and results['ids']:
+                    sim_list = []
+                    for idx, dist in enumerate(results['distances'][0]):
+                        sim_list.append({
+                            "similarity": 1.0 - dist,  # convert distance to similarity
+                            "metadata": results['metadatas'][0][idx],
+                            "text": results['documents'][0][idx]
+                        })
+                    return sorted(sim_list, key=lambda x: x['similarity'], reverse=True)
+            except Exception as e:
+                logger.error(f"❌ ChromaDB query failed: {e}")
+        # NumPy fallback
         if self.weights.shape[0] == 0:
             return []
-        # Normalize
         norm_vec = vector / (np.linalg.norm(vector) + 1e-8)
         norm_weights = self.weights / (np.linalg.norm(self.weights, axis=1, keepdims=True) + 1e-8)
         sim = np.dot(norm_weights, norm_vec)
-        # Sort by similarity descending
-        indices = np.argsort(sim)[::-1]
-        return [(int(i), float(sim[i])) for i in indices if sim[i] > 0.1]
-
-    def predict_patterns(self, vector: np.ndarray, top_k: int = 3) -> List[Dict]:
-        """
-        Predict likely successful patterns based on the most similar DNA entries.
-        Returns list of metadata of top_k similar patterns.
-        """
-        similarities = self.get_similarity(vector)
+        indices = np.argsort(sim)[::-1][:top_k]
         results = []
-        for idx, score in similarities[:top_k]:
+        for idx in indices:
             if idx < len(self.meta["entries"]):
                 entry = self.meta["entries"][idx].copy()
-                entry["similarity"] = score
+                entry["similarity"] = float(sim[idx])
                 results.append(entry)
-        logger.info(f"🧬 Predicted {len(results)} patterns from DNA.")
         return results
 
     def get_stats(self) -> Dict:
-        return {
-            "total_vectors": self.weights.shape[0] if self.weights is not None else 0,
-            "dimension": self.embedding_dim,
-            "entries_count": len(self.meta.get("entries", []))
-        }
+        if self._use_chroma and self.chroma:
+            try:
+                count = self.collection.count()
+                return {"backend": "ChromaDB", "total_patterns": count}
+            except:
+                pass
+        return {"backend": "NumPy", "total_patterns": self.weights.shape[0] if self.weights is not None else 0}
