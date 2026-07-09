@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🔥 DNA ENGINE (Level 5 — God-Tier Persistent Vector Memory)
-- Uses ChromaDB PersistentClient for disk-based vector storage.
-- Falls back to NumPy in-memory if ChromaDB not installed.
-- Generates embeddings via SBERT (or deterministic random fallback).
-- Auto-creates state/dna/ directory.
-- Provides similarity search with cosine distance.
-- Robust error handling: never crashes the framework.
+🔥 DNA ENGINE (Level 5 — ChromaDB Cloud + Local Fallback)
+- Uses ChromaDB Cloud (if configured) or PersistentClient (local).
+- Falls back to NumPy if neither is available.
+- Generates embeddings via SBERT or deterministic random.
 """
 
 import os
@@ -22,11 +19,13 @@ logger = logging.getLogger("ZeroRecon")
 class DNA:
     """
     Level 5 DNA: Persistent vector memory with automatic fallback.
+    Now supports ChromaDB Cloud.
     """
-    def __init__(self, state_dir: Path = Path("state/dna"), embedding_dim: int = 384):
+    def __init__(self, state_dir: Path = Path("state/dna"), config: Dict = None, embedding_dim: int = 384):
         self.state_dir = Path(state_dir)
         self.embedding_dim = embedding_dim
-        # ফোল্ডার তৈরি (যদি না থাকে)
+        self.config = config or {}
+        # ফোল্ডার তৈরি (যদি না থাকে) — লোকাল ফ্যালব্যাকের জন্য
         self.state_dir.mkdir(parents=True, exist_ok=True)
         
         # ব্যাকএন্ড ভেরিয়েবল
@@ -44,14 +43,27 @@ class DNA:
 
     def _init_backend(self):
         """
-        Initialize ChromaDB PersistentClient or fallback to NumPy.
+        Initialize ChromaDB Cloud, then Local, then NumPy fallback.
         """
         try:
             import chromadb
-            # 🔥 নতুন পদ্ধতি: PersistentClient (ডিপ্রিকেটেড Settings বাদ)
-            self.chroma = chromadb.PersistentClient(path=str(self.state_dir))
-            self._use_chroma = True
-            logger.info("🧬 DNA using ChromaDB PersistentClient.")
+            cloud_config = self.config.get("chromadb", {}).get("cloud", {})
+            
+            # 🔥 চেক করি ক্লাউড কনফিগ আছে কিনা
+            if cloud_config.get("enabled") and cloud_config.get("api_key"):
+                # ChromaDB Cloud
+                self.chroma = chromadb.CloudClient(
+                    api_key=cloud_config.get("api_key"),
+                    tenant=cloud_config.get("tenant", "431f5d32-100a-4016-a2ae-43d9572e46ad"),
+                    database=cloud_config.get("database", "zero_recon_dna")
+                )
+                self._use_chroma = True
+                logger.info("🧬 DNA using ChromaDB Cloud.")
+            else:
+                # Local PersistentClient
+                self.chroma = chromadb.PersistentClient(path=str(self.state_dir))
+                self._use_chroma = True
+                logger.info("🧬 DNA using ChromaDB PersistentClient (local).")
             
             # Collection তৈরি (যদি না থাকে)
             self.collection = self.chroma.get_or_create_collection(
@@ -136,7 +148,7 @@ class DNA:
                     sim_list = []
                     for idx, dist in enumerate(results['distances'][0]):
                         sim_list.append({
-                            "similarity": 1.0 - dist,
+                            "similarity": 1.0 - dist,  # cosine distance → similarity
                             "metadata": results['metadatas'][0][idx],
                             "text": results['documents'][0][idx][:200] + "..."
                         })
@@ -145,7 +157,7 @@ class DNA:
         except Exception as e:
             logger.error(f"❌ ChromaDB query failed: {e}. Falling back to NumPy.")
             return self._numpy_similarity(vector, top_k)
-        
+
         # NumPy fallback (if ChromaDB not used)
         return self._numpy_similarity(vector, top_k)
 
@@ -170,7 +182,7 @@ class DNA:
         if self._use_chroma and self.chroma:
             try:
                 count = self.collection.count()
-                return {"backend": "ChromaDB", "total_patterns": count}
+                return {"backend": "ChromaDB Cloud" if "CloudClient" in str(type(self.chroma)) else "ChromaDB Local", "total_patterns": count}
             except:
                 pass
         return {"backend": "NumPy", "total_patterns": self.weights.shape[0] if self.weights is not None else 0}
