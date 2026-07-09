@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DNA — Persistent Vector Memory using ChromaDB + Sentence-Transformers.
-Stores successful reconnaissance patterns as embeddings.
-Provides fast similarity search and incremental learning.
+🔥 DNA ENGINE (Level 5 — God-Tier Persistent Vector Memory)
+- Uses ChromaDB PersistentClient for disk-based vector storage.
+- Falls back to NumPy in-memory if ChromaDB not installed.
+- Generates embeddings via SBERT (or deterministic random fallback).
+- Auto-creates state/dna/ directory.
+- Provides similarity search with cosine distance.
+- Robust error handling: never crashes the framework.
 """
 
 import os
@@ -17,57 +21,77 @@ logger = logging.getLogger("ZeroRecon")
 
 class DNA:
     """
-    Level 5 DNA: Uses ChromaDB for persistent storage and SBERT for embeddings.
-    Falls back to NumPy if ChromaDB is not installed.
+    Level 5 DNA: Persistent vector memory with automatic fallback.
     """
     def __init__(self, state_dir: Path = Path("state/dna"), embedding_dim: int = 384):
         self.state_dir = Path(state_dir)
         self.embedding_dim = embedding_dim
+        # ফোল্ডার তৈরি (যদি না থাকে)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         
-        # Try loading ChromaDB
+        # ব্যাকএন্ড ভেরিয়েবল
         self.chroma = None
+        self.collection = None
         self.sbert = None
         self._use_chroma = False
+        
+        # NumPy ফ্যালব্যাকের জন্য
+        self.weights = np.empty((0, self.embedding_dim), dtype=np.float32)
+        self.meta = {"entries": []}
+        
+        # ইনি‌শিয়ালাইজেশন
         self._init_backend()
 
     def _init_backend(self):
-        """Initialize either ChromaDB or fallback to NumPy."""
+        """
+        Initialize ChromaDB PersistentClient or fallback to NumPy.
+        """
         try:
             import chromadb
-            from chromadb.config import Settings
-            self.chroma = chromadb.Client(Settings(
-                chroma_db_impl="duckdb+parquet",
-                persist_directory=str(self.state_dir)
-            ))
+            # 🔥 নতুন পদ্ধতি: PersistentClient (ডিপ্রিকেটেড Settings বাদ)
+            self.chroma = chromadb.PersistentClient(path=str(self.state_dir))
             self._use_chroma = True
-            logger.info("🧬 DNA using ChromaDB (persistent vector DB).")
-            # Create collection if not exists
+            logger.info("🧬 DNA using ChromaDB PersistentClient.")
+            
+            # Collection তৈরি (যদি না থাকে)
             self.collection = self.chroma.get_or_create_collection(
                 name="dna_patterns",
                 metadata={"hnsw:space": "cosine"}
             )
-            # Try loading SBERT for embeddings
+            logger.info(f"🧬 ChromaDB collection ready: {self.collection.count()} vectors.")
+            
+            # SBERT লোড করার চেষ্টা (ঐচ্ছিক)
             try:
                 from sentence_transformers import SentenceTransformer
                 self.sbert = SentenceTransformer('all-MiniLM-L6-v2')
                 logger.info("🧬 SBERT loaded for embeddings.")
             except ImportError:
                 logger.warning("⚠️ Sentence-Transformers not installed. Using random embeddings.")
+            except Exception as e:
+                logger.warning(f"⚠️ SBERT load failed: {e}. Using random embeddings.")
+                
         except ImportError:
             logger.warning("⚠️ ChromaDB not installed. Falling back to NumPy in-memory.")
             self._use_chroma = False
             self.weights = np.empty((0, self.embedding_dim), dtype=np.float32)
             self.meta = {"entries": []}
+        except Exception as e:
+            logger.error(f"❌ ChromaDB initialization failed: {e}. Falling back to NumPy.")
+            self._use_chroma = False
+            self.weights = np.empty((0, self.embedding_dim), dtype=np.float32)
+            self.meta = {"entries": []}
 
     def _embed(self, text: str) -> np.ndarray:
-        """Generate embedding vector from text using SBERT or fallback."""
+        """
+        Generate embedding vector from text.
+        Uses SBERT if available, otherwise deterministic random.
+        """
         if self.sbert:
             try:
                 return self.sbert.encode(text, normalize_embeddings=True)
-            except:
-                pass
-        # Fallback: random deterministic embedding
+            except Exception as e:
+                logger.debug(f"SBERT encode failed: {e}. Using random fallback.")
+        # Fallback: deterministic random (same text → same vector)
         np.random.seed(hash(text) % 2**32)
         return np.random.randn(self.embedding_dim)
 
@@ -75,32 +99,34 @@ class DNA:
         """
         Add a new pattern to the DNA (text + metadata).
         """
-        vector = self._embed(text)
-        if self._use_chroma and self.chroma:
-            try:
+        try:
+            vector = self._embed(text)
+            if self._use_chroma and self.chroma:
+                # ID তৈরি (target + timestamp)
+                doc_id = f"{metadata.get('target', 'unknown')}_{len(self.collection.get()['ids'])}"
                 self.collection.add(
                     embeddings=[vector.tolist()],
                     documents=[text],
                     metadatas=[metadata],
-                    ids=[f"{metadata.get('target', 'unknown')}_{len(self.collection.get()['ids'])}"]
+                    ids=[doc_id]
                 )
-                logger.info(f"🧬 Pattern added to ChromaDB.")
-            except Exception as e:
-                logger.error(f"❌ ChromaDB add failed: {e}")
-        else:
-            # NumPy fallback
-            self.weights = np.vstack([self.weights, vector.reshape(1, -1)])
-            self.meta["entries"].append(metadata)
-            logger.info(f"🧬 Pattern added to NumPy DNA (total: {self.weights.shape[0]})")
+                logger.info(f"🧬 Pattern added to ChromaDB: {doc_id}")
+            else:
+                # NumPy fallback
+                self.weights = np.vstack([self.weights, vector.reshape(1, -1)])
+                self.meta["entries"].append(metadata)
+                logger.info(f"🧬 Pattern added to NumPy DNA (total: {self.weights.shape[0]})")
+        except Exception as e:
+            logger.error(f"❌ Failed to add pattern: {e}")
 
     def get_similarity(self, text: str, top_k: int = 5) -> List[Dict]:
         """
         Search for similar patterns in the DNA.
         Returns list of metadata with similarity scores.
         """
-        vector = self._embed(text)
-        if self._use_chroma and self.chroma:
-            try:
+        try:
+            vector = self._embed(text)
+            if self._use_chroma and self.chroma:
                 results = self.collection.query(
                     query_embeddings=[vector.tolist()],
                     n_results=top_k,
@@ -110,14 +136,22 @@ class DNA:
                     sim_list = []
                     for idx, dist in enumerate(results['distances'][0]):
                         sim_list.append({
-                            "similarity": 1.0 - dist,  # convert distance to similarity
+                            "similarity": 1.0 - dist,  # cosine distance → similarity
                             "metadata": results['metadatas'][0][idx],
-                            "text": results['documents'][0][idx]
+                            "text": results['documents'][0][idx][:200] + "..."
                         })
                     return sorted(sim_list, key=lambda x: x['similarity'], reverse=True)
-            except Exception as e:
-                logger.error(f"❌ ChromaDB query failed: {e}")
-        # NumPy fallback
+                return []
+        except Exception as e:
+            logger.error(f"❌ ChromaDB query failed: {e}. Falling back to NumPy.")
+            # Fallback to NumPy if ChromaDB fails
+            return self._numpy_similarity(vector, top_k)
+
+        # NumPy fallback (if ChromaDB not used)
+        return self._numpy_similarity(vector, top_k)
+
+    def _numpy_similarity(self, vector: np.ndarray, top_k: int) -> List[Dict]:
+        """NumPy-based similarity search (fallback)."""
         if self.weights.shape[0] == 0:
             return []
         norm_vec = vector / (np.linalg.norm(vector) + 1e-8)
@@ -133,6 +167,7 @@ class DNA:
         return results
 
     def get_stats(self) -> Dict:
+        """Return DNA statistics."""
         if self._use_chroma and self.chroma:
             try:
                 count = self.collection.count()
@@ -140,3 +175,18 @@ class DNA:
             except:
                 pass
         return {"backend": "NumPy", "total_patterns": self.weights.shape[0] if self.weights is not None else 0}
+
+    def clear(self):
+        """Clear all DNA data."""
+        if self._use_chroma and self.chroma:
+            try:
+                all_ids = self.collection.get()['ids']
+                if all_ids:
+                    self.collection.delete(ids=all_ids)
+                logger.info("🗑️ ChromaDB DNA cleared.")
+            except Exception as e:
+                logger.error(f"ChromaDB clear failed: {e}")
+        else:
+            self.weights = np.empty((0, self.embedding_dim), dtype=np.float32)
+            self.meta = {"entries": []}
+            logger.info("🗑️ NumPy DNA cleared.")
