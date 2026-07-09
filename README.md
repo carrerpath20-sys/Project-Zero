@@ -171,7 +171,3 @@ python main.py target.com --verbose
 - **GitHub রিপো:** https://github.com/carrerpath20-sys/Project-Zero
 - **API প্রোভাইডার:** [Cerebras](https://cerebras.ai), [OpenRouter](https://openrouter.ai)
 - **রিপোর্ট ইস্যু:** GitHub Issues সেকশনে খুলুন।
-
----
-
-**🎯 এখন আপনি Zero Recon Framework ব্যবহার করতে প্রস্তুত। শুভ রিকন!**
