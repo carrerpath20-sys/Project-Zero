@@ -1,5 +1,7 @@
 # ============================================================
-# ZERO RECON FRAMEWORK — COMPLETE DEPENDENCIES
+#  ZERO RECON — REQUIREMENTS (Level 5)
+#  (c) 2026 Zero Labs — Offensive Security Research
+#  Windows/Linux/macOS compatible
 # ============================================================
 
 # Core
@@ -42,8 +44,22 @@ PyGithub>=2.1.0
 tiktoken>=0.5.0
 
 # ============================================================
-# METADATA EXTRACTION (Phase 14 - Supply Chain)
+#  METADATA EXTRACTION (Phase 14 - Supply Chain)
 # ============================================================
 PyPDF2>=3.0.0
 openpyxl>=3.1.0
 python-docx>=1.0.0
+
+# ============================================================
+#  DASHBOARD (Phase 16 - Live Monitoring)
+# ============================================================
+Flask>=2.3.0
+flask-socketio>=5.3.0
+eventlet>=0.33.0
+
+# ============================================================
+#  EVO ENGINES (Level 5 — God-Tier Intelligence)
+# ============================================================
+chromadb>=0.4.0               # Persistent vector DB for DNA
+sentence-transformers>=2.2.0  # SBERT embeddings (optional, 150MB)
+esprima>=4.0.1               # JavaScript AST parser for Symbolic Engine
