@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
-████████████████████████████████████████████████████████████████████████████
-█  SUPERVISOR ORCHESTRATOR — ARTEMIS-Style Master Loop                 █
-█  - Manages the entire reconnaissance pipeline                       █
-█  - Spawns sub-agents (max 2 parallel)                             █
-█  - Calls tools via api_router                                     █
-█  - Handles state, checkpoints, and error recovery                 █
-████████████████████████████████████████████████████████████████████████████
+🔥 SUPERVISOR ORCHESTRATOR (Level 5 — God-Tier Evo Integration)
+- Initializes DNA, MCTS, Mutator, Debate, and Reflector engines.
+- Runs MCTS search to find the best reconnaissance path.
+- Passes MCTS result, Debate verdict, and DNA to the Executor.
+- After all phases, runs Reflector to update DNA with learnings.
+- Integrates health monitor and checkpoint system.
 """
 
 import os
@@ -21,6 +19,14 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+# Evo imports
+from evo.dna import DNA
+from evo.mcts import MCTS
+from evo.mutator import Mutator
+from evo.debate import DebateEngine
+from evo.reflector import Reflector
+
+# Supervisor imports
 from .api_router import AIRouter
 from .context_manager import ContextManager
 from .health_monitor import HealthMonitor
@@ -29,127 +35,203 @@ logger = logging.getLogger("ZeroRecon")
 
 class SupervisorOrchestrator:
     """
-    ARTEMIS-স্টাইল সুপারভাইজার — এটি পুরো মিশনের 'মস্তিষ্ক'।
-    ফেজগুলো অর্কেস্ট্রেট করে, এজেন্ট স্পন করে, এবং রেজাল্ট সংগ্রহ করে।
+    Level 5 Supervisor — Master Orchestrator with Evo Intelligence.
     """
-    
-    def __init__(self, target: str, config: Dict[str, Any], auto_install: bool = False,
-                 resume_session: Optional[str] = None, phases_to_run: Optional[str] = None):
+
+    def __init__(
+        self,
+        target: str,
+        config: Dict[str, Any],
+        auto_install: bool = False,
+        resume_session: Optional[str] = None,
+        phases_to_run: Optional[str] = None
+    ):
         self.target = target
         self.config = config
         self.auto_install = auto_install
         self.resume_session = resume_session
         self.phases_to_run = self._parse_phases(phases_to_run)
-        
-        # ডিরেক্টরি সেটআপ
+
+        # Directories
         self.output_dir = Path(config.get("output_dir", "outputs"))
         self.state_dir = Path(config.get("state_dir", "state"))
         self.reports_dir = self.output_dir / "reports"
         self.logs_dir = self.output_dir / "logs"
         self.cache_dir = self.state_dir / "cache"
         self.checkpoint_dir = self.state_dir / "checkpoint"
-        
-        for d in [self.output_dir, self.state_dir, self.reports_dir, self.logs_dir, 
-                  self.cache_dir, self.checkpoint_dir]:
+
+        for d in [self.output_dir, self.state_dir, self.reports_dir,
+                  self.logs_dir, self.cache_dir, self.checkpoint_dir]:
             d.mkdir(parents=True, exist_ok=True)
-        
-        # AI রাউটার
+
+        # Core components
         self.router = AIRouter(config)
         self.context_manager = ContextManager()
         self.health_monitor = HealthMonitor()
-        
-        # স্টেট
+
+        # ================================================================
+        # 🧬 EVO ENGINES (Level 5)
+        # ================================================================
+        self.dna = DNA(state_dir=self.state_dir / "dna")
+        self.mcts = MCTS(config, self.dna, self.router)
+        self.mutator = Mutator(config, self.dna, self.router)
+        self.debate = DebateEngine(config, self.router)
+        self.reflector = Reflector(config, self.dna)
+
+        # State
         self.results = {}
         self.current_phase = 0
         self.start_time = None
-        self.active_agents = []
+        self.mcts_result = None
+        self.debate_rules = {"verdict": "APPROVED", "flaws": []}
         self.checkpoint_file = self.checkpoint_dir / f"session_{self.target}_{datetime.now().strftime('%Y%m%d')}.json"
-        
-        logger.info(f"🦅 SupervisorOrchestrator initialized for target: {target}")
-    
+
+        logger.info(f"🦅 SupervisorOrchestrator (Level 5) initialized for: {target}")
+
     def _parse_phases(self, phases_str: Optional[str]) -> List[int]:
-        """--phases আর্গুমেন্ট থেকে ফেজ লিস্ট তৈরি করে"""
         if not phases_str:
-            return list(range(1, 13))  # ১ থেকে ১২ পর্যন্ত
+            return list(range(1, 16))
         try:
             return [int(p.strip()) for p in phases_str.split(",") if p.strip().isdigit()]
         except:
             logger.warning("⚠️ Invalid --phases format. Running all phases.")
-            return list(range(1, 13))
-    
+            return list(range(1, 16))
+
     def run(self) -> Dict[str, Any]:
-        """মেইন মিশন এক্সিকিউশন — ARTEMIS-স্টাইল লুপ"""
+        """Main execution — ARTEMIS-style loop with Evo intelligence."""
         self.start_time = datetime.now()
         logger.info(f"🔥 Mission started for {self.target}")
-        
-        # ১. ইন্টিগ্রিটি চেক (Health Monitor)
+
+        # Health check
         if not self.health_monitor.check_system_health():
             logger.critical("❌ System health check failed. Aborting.")
             return {}
-        
-        # ২. রেজিউম চেক (যদি resume session দেওয়া থাকে)
+
+        # Resume checkpoint if provided
         if self.resume_session:
             self._load_checkpoint(self.resume_session)
-        
-        # ৩. রিকন ফেজগুলো চালানো
+
+        # ================================================================
+        # 🧠 PHASE 0: MCTS Search & Path Planning
+        # ================================================================
+        # Gather basic passive data for MCTS
+        passive_data = {
+            "target": self.target,
+            "domain": self.target,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        logger.info("🧠 Running MCTS search for optimal reconnaissance path...")
+        self.mcts_result = self.mcts.search(self.target, passive_data)
+        logger.info(f"✅ MCTS selected: {self.mcts_result.get('selected')} (confidence: {self.mcts_result.get('confidence', 0):.2f})")
+
+        # ================================================================
+        # 🧬 PHASE 0.5: Mutator — Generate Custom Rules
+        # ================================================================
+        mutator_rules = self.mutator.generate_rules(
+            self.target,
+            self.mcts_result,
+            passive_data
+        )
+        logger.info(f"🧬 Mutator generated {mutator_rules.get('count', 0)} custom rules.")
+
+        # ================================================================
+        # ⚖️ PHASE 0.6: Debate — Validate Rules
+        # ================================================================
+        if mutator_rules.get("rules"):
+            debate_result = self.debate.run_debate(self.target, mutator_rules.get("rules", []))
+            self.debate_rules = {
+                "verdict": debate_result.get("verdict", "APPROVED"),
+                "flaws": debate_result.get("flaws", [])
+            }
+            logger.info(f"⚖️ Debate verdict: {self.debate_rules['verdict']}")
+        else:
+            self.debate_rules = {"verdict": "APPROVED", "flaws": []}
+
+        # ================================================================
+        # 🚀 EXECUTION: Run all phases with Evo context
+        # ================================================================
         for phase_num in self.phases_to_run:
             self.current_phase = phase_num
             logger.info(f"📡 Phase {phase_num} started")
-            
+
             try:
-                # ফেজ এক্সিকিউট
                 phase_result = self._run_phase(phase_num)
                 self.results[f"phase_{phase_num}"] = phase_result
-                
-                # চেকপয়েন্ট সেভ
                 self._save_checkpoint()
-                
-                # হেলথ মনিটর চেক
+
                 if not self.health_monitor.is_healthy():
                     logger.warning("⚠️ Health monitor triggered recovery. Pausing briefly.")
                     time.sleep(5)
-                
+
             except Exception as e:
-                logger.error(f"❌ Phase {phase_num} failed with error: {e}")
+                logger.error(f"❌ Phase {phase_num} failed: {e}")
                 logger.debug(traceback.format_exc())
-                # হিলার এজেন্ট ট্রিগার করো (বর্তমানে শুধু লগ)
                 self.results[f"phase_{phase_num}"] = {"error": str(e)}
-                # থামো না — পরবর্তী ফেজে চলে যাও
                 continue
-        
-        # ৪. ফাইনাল রিপোর্ট
+
+        # ================================================================
+        # 🧠 FINAL: Reflector — Update DNA with learnings
+        # ================================================================
+        logger.info("🔄 Running Reflector to update DNA...")
+        reflection = self.reflector.reflect(
+            self.target,
+            mutator_rules.get("rules", []),
+            self.results,
+            self.mcts_result
+        )
+        logger.info(f"✅ Reflector: {reflection.get('insights', ['No insights'])[0]}")
+
+        # ================================================================
+        # 📊 REPORT: Generate final report
+        # ================================================================
         report = self._generate_report()
         self._save_report(report)
-        
-        # ৫. ক্লিনআপ
         self._cleanup()
-        
+
         logger.info(f"✅ Mission completed in {(datetime.now() - self.start_time).total_seconds():.2f}s")
         return report
-    
+
     def _run_phase(self, phase_num: int) -> Dict[str, Any]:
-        """একটি নির্দিষ্ট ফেজ চালানো — ডায়নামিক ইম্পোর্ট করে"""
+        """Run a single phase with full Evo context."""
         phase_module = f"agents.recon.phase{phase_num}"
         try:
-            # ডায়নামিক ইম্পোর্ট
             module = __import__(phase_module, fromlist=["run"])
             run_func = getattr(module, "run")
-            # প্রতিটি ফেজের run(target, router, config) সিগনেচার আছে
-            result = run_func(self.target, self.router, self.config)
+
+            phase_context = {
+                "target": self.target,
+                "router": self.router,
+                "config": self.config,
+                "previous_results": self.results,
+                "mcts_path": self.mcts_result,
+                "debate_rules": self.debate_rules,
+                "dna": self.dna,
+                "mutator_rules": self.mutator.generate_rules(
+                    self.target,
+                    self.mcts_result,
+                    {"target": self.target}
+                )
+            }
+
+            result = run_func(self.target, phase_context)
             return result
+
         except ImportError as e:
             logger.warning(f"⚠️ Phase {phase_num} module not found: {e}")
-            return {"error": f"Module not found: {e}"}
+            return {"error": f"Module not found: {e}", "skipped": True}
         except Exception as e:
             logger.error(f"❌ Phase {phase_num} execution error: {e}")
             return {"error": str(e)}
-    
+
     def _save_checkpoint(self):
-        """বর্তমান অগ্রগতি চেকপয়েন্ট ফাইলে সেভ করে"""
+        """Save current progress to checkpoint file."""
         checkpoint_data = {
             "target": self.target,
             "current_phase": self.current_phase,
             "results": self.results,
+            "mcts_result": self.mcts_result,
+            "debate_rules": self.debate_rules,
             "timestamp": datetime.now().isoformat()
         }
         try:
@@ -158,10 +240,9 @@ class SupervisorOrchestrator:
             logger.debug(f"💾 Checkpoint saved: {self.checkpoint_file}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to save checkpoint: {e}")
-    
+
     def _load_checkpoint(self, session_id: str):
-        """আগের সেশন থেকে চেকপয়েন্ট লোড করে"""
-        # session_id থেকে ফাইল পাথ তৈরি
+        """Load previous session from checkpoint."""
         checkpoint_path = self.checkpoint_dir / f"session_{session_id}.json"
         if not checkpoint_path.exists():
             logger.warning(f"⚠️ Checkpoint {checkpoint_path} not found. Starting fresh.")
@@ -171,39 +252,44 @@ class SupervisorOrchestrator:
                 data = json.load(f)
             self.results = data.get("results", {})
             self.current_phase = data.get("current_phase", 0)
+            self.mcts_result = data.get("mcts_result")
+            self.debate_rules = data.get("debate_rules", {"verdict": "APPROVED", "flaws": []})
             logger.info(f"✅ Resumed from checkpoint: phase {self.current_phase}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to load checkpoint: {e}")
-    
+
     def _generate_report(self) -> Dict[str, Any]:
-        """ফাইনাল রিপোর্ট তৈরি — সব ফেজের ডাটা একত্রিত করে"""
-        report = {
+        """Generate final report with Evo metadata."""
+        return {
             "target": self.target,
             "start_time": self.start_time.isoformat(),
             "end_time": datetime.now().isoformat(),
             "duration_seconds": (datetime.now() - self.start_time).total_seconds(),
             "results": self.results,
+            "evo_meta": {
+                "mcts": self.mcts_result,
+                "debate": self.debate_rules,
+                "dna_stats": self.dna.get_stats()
+            },
             "config_summary": {
                 "phases_run": self.phases_to_run,
                 "auto_install": self.auto_install
             }
         }
-        return report
-    
+
     def _save_report(self, report: Dict[str, Any]):
-        """রিপোর্ট JSON এবং HTML আকারে সেভ করে"""
+        """Save report in JSON and HTML formats."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         json_file = self.reports_dir / f"report_{self.target}_{timestamp}.json"
         with open(json_file, 'w') as f:
             json.dump(report, f, indent=2, default=str)
         logger.info(f"📄 JSON report saved: {json_file}")
-        
-        # HTML রিপোর্ট (সহজ টেমপ্লেট)
+
         html_file = self.reports_dir / f"report_{self.target}_{timestamp}.html"
         self._generate_html_report(report, html_file)
-    
+
     def _generate_html_report(self, report: Dict[str, Any], html_path: Path):
-        """সহজ HTML রিপোর্ট তৈরি (Markdown-স্টাইল)"""
+        """Generate simple HTML report."""
         html_content = f"""
 <!DOCTYPE html>
 <html>
@@ -213,15 +299,18 @@ body {{ font-family: monospace; background: #1e1e1e; color: #d4d4d4; padding: 20
 h1 {{ color: #4fc3f7; }}
 h2 {{ color: #81c784; }}
 pre {{ background: #2d2d2d; padding: 15px; border-radius: 5px; overflow-x: auto; }}
+.evo {{ color: #f8a4a4; }}
 </style>
 </head>
 <body>
-<h1>🔍 Zero Recon Report</h1>
+<h1>🔍 Zero Recon Report (Level 5)</h1>
 <p><strong>Target:</strong> {self.target}</p>
 <p><strong>Start:</strong> {report.get('start_time')}</p>
 <p><strong>End:</strong> {report.get('end_time')}</p>
 <p><strong>Duration:</strong> {report.get('duration_seconds', 0):.2f}s</p>
-<h2>Results by Phase</h2>
+<h2>🧠 Evo Meta</h2>
+<pre>{json.dumps(report.get('evo_meta', {}), indent=2, default=str)}</pre>
+<h2>📊 Results by Phase</h2>
 <pre>{json.dumps(report.get('results', {}), indent=2, default=str)}</pre>
 </body>
 </html>
@@ -229,8 +318,7 @@ pre {{ background: #2d2d2d; padding: 15px; border-radius: 5px; overflow-x: auto;
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
         logger.info(f"📄 HTML report saved: {html_path}")
-    
+
     def _cleanup(self):
-        """থ্রেড ও রিসোর্স ক্লিনআপ"""
-        # (বর্তমানে কোনো থ্রেড নেই, কিন্তু ভবিষ্যতে এজেন্ট ক্লিনআপ এখানে হবে)
+        """Clean up resources."""
         logger.debug("🧹 Cleanup complete.")
