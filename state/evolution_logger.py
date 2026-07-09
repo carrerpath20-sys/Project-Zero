@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-EVOLUTION LOGGER — Self-Learning Memory for AI Agents
-- Logs which tactics worked (e.g., "massdns fallback succeeded")
-- Logs failures (e.g., "Cloudflare bypass failed due to rate limit")
-- Healer Agent queries this to avoid repeating mistakes.
-- Stores data in state/evolution_log.json
+🔥 EVOLUTION LOGGER (Level 5 — Evo & Debate Logging)
+- Logs MCTS decisions, Mutation results, Debate verdicts, and Reflections.
+- Stores data in state/evolution_log.json.
+- Provides query methods for Healer Agent to learn from past mistakes.
+- Auto-creates required directories (state/, dna/, profiles/, snapshots/).
 """
+
 import json
 import logging
 from pathlib import Path
@@ -18,6 +19,12 @@ logger = logging.getLogger("ZeroRecon")
 class EvolutionLogger:
     def __init__(self, base_dir: Path = Path("state")):
         self.base_dir = Path(base_dir)
+        # নিশ্চিত করি ফোল্ডারগুলো আছে (state/, state/dna/, state/profiles/, state/snapshots/)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        (self.base_dir / "dna").mkdir(parents=True, exist_ok=True)
+        (self.base_dir / "profiles").mkdir(parents=True, exist_ok=True)
+        (self.base_dir / "snapshots").mkdir(parents=True, exist_ok=True)
+        
         self.log_file = self.base_dir / "evolution_log.json"
         self.data = self._load()
     
@@ -28,20 +35,17 @@ class EvolutionLogger:
                     return json.load(f)
             except:
                 pass
-        return {"entries": [], "stats": {"success": 0, "failure": 0}}
+        return {"entries": [], "stats": {"success": 0, "failure": 0, "debate_wins": 0}}
     
     def _save(self):
         try:
             with open(self.log_file, 'w') as f:
-                json.dump(self.data, f, indent=2)
+                json.dump(self.data, f, indent=2, default=str)
         except Exception as e:
             logger.warning(f"Evolution log save failed: {e}")
     
     def log(self, event_type: str, target: str, phase: int, details: Dict, outcome: str):
-        """
-        event_type: e.g., "dns_bruteforce", "cloud_scan", "ai_analysis"
-        outcome: "success" or "failure"
-        """
+        """Generic log method for any event."""
         entry = {
             "timestamp": datetime.now().isoformat(),
             "target": target,
@@ -51,38 +55,109 @@ class EvolutionLogger:
             "details": details
         }
         self.data["entries"].append(entry)
-        
-        # স্ট্যাটস আপডেট
         if outcome == "success":
             self.data["stats"]["success"] += 1
         else:
             self.data["stats"]["failure"] += 1
         
-        # লিমিট: সর্বোচ্চ ১০০০ এন্ট্রি রাখি
-        if len(self.data["entries"]) > 1000:
-            self.data["entries"] = self.data["entries"][-1000:]
-        
+        if len(self.data["entries"]) > 1500:  # ১৫০০ এন্ট্রি পর্যন্ত রাখি
+            self.data["entries"] = self.data["entries"][-1500:]
         self._save()
         logger.debug(f"📝 Evolution log: {event_type} -> {outcome}")
     
+    # ---------- বিশেষায়িত লগ মেথড (Level 5) ----------
+    def log_mcts(self, target: str, selected_path: str, confidence: float, all_paths: List):
+        """Log MCTS search result."""
+        self.log(
+            event_type="mcts",
+            target=target,
+            phase=0,
+            details={
+                "selected_path": selected_path,
+                "confidence": confidence,
+                "all_paths": all_paths
+            },
+            outcome="success" if confidence > 0.6 else "failure"
+        )
+    
+    def log_debate(self, target: str, verdict: str, flaws: List, rules_count: int):
+        """Log Debate verdict."""
+        outcome = "success" if verdict == "APPROVED" else "failure"
+        if verdict == "APPROVED":
+            self.data["stats"]["debate_wins"] += 1
+        
+        self.log(
+            event_type="debate",
+            target=target,
+            phase=0,
+            details={
+                "verdict": verdict,
+                "flaws": flaws[:5],
+                "rules_count": rules_count
+            },
+            outcome=outcome
+        )
+    
+    def log_mutation(self, target: str, rules_generated: int, source: str):
+        """Log Mutator rule generation."""
+        self.log(
+            event_type="mutation",
+            target=target,
+            phase=0,
+            details={
+                "rules_generated": rules_generated,
+                "source": source
+            },
+            outcome="success" if rules_generated > 0 else "failure"
+        )
+    
+    def log_reflection(self, target: str, success_rate: float, dna_updated: bool, injected: bool):
+        """Log Reflector DNA update."""
+        self.log(
+            event_type="reflection",
+            target=target,
+            phase=0,
+            details={
+                "success_rate": success_rate,
+                "dna_updated": dna_updated,
+                "injected": injected
+            },
+            outcome="success" if dna_updated else "failure"
+        )
+    
+    # ---------- কুয়েরি মেথড (Healer Agent-এর জন্য) ----------
     def get_lesson(self, target: str, phase: int, event_type: str) -> Optional[str]:
-        """
-        কোনো টার্গেট/ফেজের জন্য আগের লেসন খোঁজে।
-        রিটার্ন: "success" or "failure" or None
-        """
+        """Check previous outcomes for a specific event."""
         for entry in reversed(self.data["entries"]):
             if (entry["target"] == target and 
                 entry["phase"] == phase and 
                 entry["event_type"] == event_type):
                 return entry["outcome"]
+        # Generic fallback (without target)
+        for entry in reversed(self.data["entries"]):
+            if (entry["phase"] == phase and 
+                entry["event_type"] == event_type):
+                return entry["outcome"]
         return None
     
+    def get_debate_history(self, target: str, limit: int = 5) -> List[Dict]:
+        """Get recent debate results for a target."""
+        return [e for e in self.data["entries"] 
+                if e["target"] == target and e["event_type"] == "debate"][-limit:]
+    
     def get_stats(self) -> Dict:
-        """সামগ্রিক পরিসংখ্যান"""
+        """Return aggregated stats."""
         return self.data["stats"]
     
+    def get_failures(self, target: str = None, limit: int = 20) -> List[Dict]:
+        """Return recent failures for debugging."""
+        failures = [e for e in self.data["entries"] if e["outcome"] == "failure"]
+        if target:
+            failures = [e for e in failures if e["target"] == target]
+        return failures[-limit:]
+    
     def clear(self):
-        """লগ মুছে ফেলা (রিসেট)"""
-        self.data = {"entries": [], "stats": {"success": 0, "failure": 0}}
+        """Wipe evolution memory."""
+        self.data = {"entries": [], "stats": {"success": 0, "failure": 0, "debate_wins": 0}}
         self._save()
         logger.info("🗑️ Evolution log cleared.")
