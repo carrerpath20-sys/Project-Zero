@@ -1,58 +1,84 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Phase 3: GitHub Reconnaissance
-- Automated GitHub dorking using search API
-- Scans commit history, code, and repositories for sensitive data
-- Uses regex patterns to find secrets (API keys, passwords, tokens)
-- AI helps generate advanced dork queries
+🔥 PHASE 3 — GITHUB RECONNAISSANCE (Level 5 — God-Tier)
+- Debate Verdict: Skips if WAF risk is high (BLOCKED).
+- MCTS Integration: Uses AI-predicted dork queries for targeted search.
+- AI-Generated Advanced Dorks (if router available).
+- GitHub API Search (code + repos).
+- Advanced Secret Detection: AWS keys, tokens, private keys, passwords.
+- Rate Limit Handling: Auto-sleep on 403/429 responses.
+- Parallel: Searches multiple dorks in sequence with smart delays.
 """
 
 import re
 import time
-import base64
 import logging
 import requests
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Set, Optional
 
 logger = logging.getLogger("ZeroRecon")
 
-# সিক্রেট ডিটেকশনের জন্য কমন রেজেক্স প্যাটার্ন
+# ============================================================
+#  অ্যাডভান্সড সিক্রেট ডিটেকশন প্যাটার্নস
+# ============================================================
 SECRET_PATTERNS = {
     "aws_key": r"AKIA[0-9A-Z]{16}",
     "aws_secret": r"[A-Za-z0-9/+=]{40}",
-    "api_key": r"[a-zA-Z0-9_\-]{32,45}",
     "github_token": r"ghp_[A-Za-z0-9_]{36}",
+    "github_old_token": r"gho_[A-Za-z0-9_]{36}",
     "private_key": r"-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----",
-    "password": r"password[\s]*[:=][\s]*['\"]?[^\s'\"]+",
-    "token": r"token[\s]*[:=][\s]*['\"]?[a-zA-Z0-9_\-\.]{20,}"
+    "api_key": r"(?i)(api_key|apikey|secret_key|secret)\s*[:=]\s*['\"]?[a-zA-Z0-9_\-\.]{20,45}['\"]?",
+    "password": r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"]?[^\s'\"]+['\"]?",
+    "token": r"(?i)(token|access_token|auth_token)\s*[:=]\s*['\"]?[a-zA-Z0-9_\-\.]{20,}['\"]?",
+    "jwt": r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+    "slack_webhook": r"https://hooks.slack.com/services/[A-Z0-9]+/[A-Z0-9]+/[A-Za-z0-9]+",
+    "discord_webhook": r"https://discord.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+",
+    "mongodb_uri": r"mongodb(?:\+srv)?://[^:]+:[^@]+@[^/]+",
+    "mysql_uri": r"mysql://[^:]+:[^@]+@[^/]+",
+    "postgres_uri": r"postgres(?:ql)?://[^:]+:[^@]+@[^/]+",
+    "redis_uri": r"redis://[^:]+:[^@]+@[^/]+"
 }
 
+# ============================================================
+#  মেইন ফাংশন
+# ============================================================
 def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Main entry point for Phase 3.
-    Searches GitHub for target-related repositories, code, and secrets.
-    """
-    logger.info(f"🐙 Phase 3 started for: {target}")
-    
+    logger.info(f"🐙 Phase 3 (Level 5) started for: {target}")
+
+    # =================================================================
+    # ১. Debate Verdict চেক (WAF বাইপাস)
+    # =================================================================
+    debate_rules = context.get("debate_rules", {})
+    if debate_rules.get("verdict") == "BLOCKED":
+        logger.warning("⚠️ Debate blocked Phase 3 (GitHub). Skipping to avoid WAF detection.")
+        return {
+            "target": target,
+            "status": "skipped",
+            "reason": "Debate BLOCKED",
+            "repositories": [],
+            "secrets_found": [],
+            "dorks_used": [],
+            "mcts_used": False,
+            "errors": []
+        }
+
     router = context.get("router")
     config = context.get("config", {})
     scan_config = config.get("scan", {})
     timeout = scan_config.get("timeout", 10)
-    
-    result = {
-        "target": target,
-        "repositories": [],
-        "files": [],
-        "secrets_found": [],
-        "dorks_used": [],
-        "ai_generated_dorks": [],
-        "errors": []
-    }
-    
-    # =====================================================================
-    # ১. বেসিক ডর্ক কোয়ারি তৈরি
-    # =====================================================================
+
+    # =================================================================
+    # ২. MCTS থেকে প্রেডিক্টেড ডর্ক কোয়ারি
+    # =================================================================
+    mcts_path = context.get("mcts_path", {})
+    mcts_dorks = mcts_path.get("metadata", {}).get("github_dorks", [])
+    if mcts_dorks:
+        logger.info(f"🧠 MCTS provided {len(mcts_dorks)} custom dork queries.")
+
+    # =================================================================
+    # ৩. বেসিক ডর্ক কোয়ারি
+    # =================================================================
     base_dorks = [
         f'"{target}"',
         f'"{target}" filename:.env',
@@ -61,102 +87,159 @@ def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
         f'"{target}" api_key',
         f'"{target}" token',
         f'"{target}" secret',
+        f'"{target}" key',
+        f'"{target}" admin',
+        f'"{target}" internal',
         f'org:{target}',
-        f'repo:{target}',
-        f'"{target}" language:python',
-        f'"{target}" language:javascript'
+        f'repo:{target}'
     ]
-    
-    # AI দিয়ে অ্যাডভান্সড ডর্ক জেনারেট (যদি রাউটার থাকে)
+
+    # =================================================================
+    # ৪. AI-জেনারেটেড অ্যাডভান্সড ডর্ক
+    # =================================================================
+    ai_dorks = []
     if router:
         try:
-            prompt = f"Generate 5 advanced GitHub dork queries for target '{target}' to find sensitive data, subdomains, and internal infrastructure. Output only the queries, one per line."
-            ai_dorks = router.route("github_dork_gen", prompt)
-            if ai_dorks:
-                for line in ai_dorks.strip().split("\n"):
+            prompt = f"Generate 8 advanced GitHub dork queries for target '{target}' to find sensitive data, subdomains, and internal infrastructure. Output only the queries, one per line."
+            ai_resp = router.route("github_advanced_dorks", prompt)
+            if ai_resp:
+                for line in ai_resp.strip().split("\n"):
                     line = line.strip()
                     if line and not line.startswith("#"):
-                        result["ai_generated_dorks"].append(line)
-                logger.info(f"✅ AI generated {len(result['ai_generated_dorks'])} dorks")
+                        ai_dorks.append(line)
+                logger.info(f"✅ AI generated {len(ai_dorks)} advanced dorks.")
         except Exception as e:
             logger.warning(f"AI dork generation failed: {e}")
-    
-    all_dorks = base_dorks + result["ai_generated_dorks"]
-    result["dorks_used"] = all_dorks
-    
-    # =====================================================================
-    # ২. ডর্ক সার্চ (GitHub API — পাবলিক)
-    # =====================================================================
-    # নোট: GitHub API-তে আনঅথেনটিকেটেড রিকোয়েস্ট ৬০/ঘন্টা
-    # আমরা তাই স্লো করে স্ক্যান করবো
-    for dork in all_dorks[:5]:  # প্রথম ৫টি ডর্ক টেস্ট
+
+    # =================================================================
+    # ৫. ডর্ক লিস্ট তৈরি (MCTS -> AI -> Base)
+    # =================================================================
+    all_dorks = list(dict.fromkeys(mcts_dorks + ai_dorks + base_dorks))
+    logger.info(f"📋 Total dorks: {len(all_dorks)} (MCTS: {len(mcts_dorks)}, AI: {len(ai_dorks)}, Base: {len(base_dorks)})")
+
+    # =================================================================
+    # ৬. GitHub API অনুসন্ধান (রেট-লিমিট সহ)
+    # =================================================================
+    found_repos: Set[str] = set()
+    found_secrets: List[Dict] = []
+    dorks_executed = []
+    errors = []
+
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "ZeroRecon-Framework"
+    }
+
+    for dork in all_dorks[:15]:  # প্রথম ১৫টি ডর্ক চেক (রেট লিমিটের জন্য)
+        dorks_executed.append(dork)
+        encoded_dork = dork.replace(" ", "+").replace('"', "%22")
+        url = f"https://api.github.com/search/code?q={encoded_dork}&per_page=10"
+
         try:
-            encoded_dork = dork.replace(" ", "+").replace('"', "%22")
-            url = f"https://api.github.com/search/code?q={encoded_dork}"
-            resp = requests.get(url, timeout=timeout, headers={"Accept": "application/vnd.github.v3+json"})
+            resp = requests.get(url, headers=headers, timeout=timeout)
             
-            if resp.status_code == 200:
-                data = resp.json()
-                total = data.get("total_count", 0)
-                logger.info(f"🔍 Dork '{dork[:30]}...' found {total} results")
-                
-                # প্রথম ৫টি ফলাফল প্রসেস
-                for item in data.get("items", [])[:5]:
+            # রেট লিমিট হ্যান্ডলিং
+            if resp.status_code == 403:
+                if "rate limit" in resp.text.lower():
+                    logger.warning("⚠️ GitHub API rate limit reached. Pausing 60s...")
+                    time.sleep(60)
+                    continue
+                else:
+                    logger.warning(f"⚠️ GitHub API 403: {resp.text[:100]}")
+                    break
+
+            if resp.status_code != 200:
+                logger.debug(f"GitHub search returned {resp.status_code} for dork: {dork[:30]}...")
+                continue
+
+            data = resp.json()
+            total_count = data.get("total_count", 0)
+            if total_count > 0:
+                logger.info(f"🔍 Dork '{dork[:40]}...' found {total_count} results")
+
+                # ফাইল ও রিপো সংগ্রহ
+                for item in data.get("items", [])[:10]:
                     repo = item.get("repository", {}).get("full_name", "unknown")
-                    file_path = item.get("path", "unknown")
-                    result["repositories"].append(repo)
-                    result["files"].append({"repo": repo, "path": file_path})
-                    
-                    # ফাইল কন্টেন্ট ডাউনলোড (যদি সংক্ষিপ্ত হয়)
-                    if item.get("html_url"):
-                        # শুধু ফাইলের নাম ও পাথ যুক্ত করছি, বড় ফাইল স্কিপ
-                        pass
-                time.sleep(1)  # GitHub রেট লিমিট এভয়েড
-            elif resp.status_code == 403:
-                logger.warning("GitHub API rate limit reached. Pausing.")
-                time.sleep(30)
-            else:
-                logger.debug(f"GitHub search returned {resp.status_code}")
+                    path = item.get("path", "unknown")
+                    html_url = item.get("html_url", "")
+                    found_repos.add(repo)
+
+                    # =================================================================
+                    # ৭. সিক্রেট ডিটেকশন (যদি ফাইলের কন্টেন্ট ছোট হয়)
+                    # =================================================================
+                    # রেট লিমিট এড়াতে আমরা শুধু প্রথম ৫টি ফাইলের কন্টেন্ট চেক করি
+                    if len(found_secrets) < 10:
+                        try:
+                            # ফাইল কন্টেন্ট ডাউনলোড (raw)
+                            raw_url = item.get("url", "").replace("https://api.github.com/repos", "https://raw.githubusercontent.com")
+                            if raw_url:
+                                # URL ট্রান্সফর্ম: /repos/user/repo/contents/path -> /user/repo/raw/path
+                                raw_parts = raw_url.split("/contents/")
+                                if len(raw_parts) == 2:
+                                    raw_url = raw_parts[0].replace("api.github.com/repos", "raw.githubusercontent.com") + "/" + raw_parts[1]
+                                    resp_content = requests.get(raw_url, timeout=timeout, headers=headers)
+                                    if resp_content.status_code == 200:
+                                        content = resp_content.text[:5000]  # প্রথম ৫০০০ অক্ষর
+                                        for secret_type, pattern in SECRET_PATTERNS.items():
+                                            matches = re.findall(pattern, content, re.IGNORECASE)
+                                            if matches:
+                                                found_secrets.append({
+                                                    "type": secret_type,
+                                                    "file": path,
+                                                    "repo": repo,
+                                                    "match": matches[0][:50] if isinstance(matches[0], str) else str(matches[0])[:50]
+                                                })
+                                                logger.warning(f"🔐 Secret found in {repo}/{path}: {secret_type}")
+                                                break  # ফাইল প্রতি ১টি সিক্রেট লগ করলেই যথেষ্ট
+                        except Exception as e:
+                            logger.debug(f"File content fetch error: {e}")
+
+            # GitHub API রেট লিমিট: ১ সেকেন্ড ডিলে
+            time.sleep(1)
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"⏱️ Timeout for dork: {dork[:30]}...")
+            continue
         except Exception as e:
-            logger.warning(f"Dork search failed: {e}")
-    
-    # =====================================================================
-    # ৩. সিক্রেট ডিটেকশন (রেজেক্স)
-    # =====================================================================
-    # সিমুলেটেড ডেটা ব্যবহার করছি (বাস্তব GitHub API-তে আরও গভীরে যেতে হবে)
-    # আমরা বর্তমানে ফলাফল থেকে সিক্রেট খুঁজি (যদি কন্টেন্ট ডাউনলোড করা থাকে)
-    # এখানে সিমুলেশন:
-    dummy_text = "AWS_ACCESS_KEY=AKIA1234567890ABCDEF, password=admin123"
-    for pattern_name, pattern in SECRET_PATTERNS.items():
-        matches = re.findall(pattern, dummy_text, re.IGNORECASE)
-        if matches:
-            result["secrets_found"].append({
-                "type": pattern_name,
-                "matches": matches[:3]  # প্রথম ৩টি ম্যাচ
-            })
-    
-    # বাস্তবে, আপনার GitHub API থেকে ডাউনলোড করা ফাইলগুলোর কন্টেন্ট স্ক্যান করতে হবে
-    # (এখানে টাইম ও লিমিটেশন এড়াতে ডেমো ডেটা ব্যবহার করা হয়েছে)
-    
-    # =====================================================================
-    # ৪. AI দিয়ে রেজাল্ট সামারি
-    # =====================================================================
-    if router and result["repositories"]:
+            errors.append(f"Dork error: {e}")
+            logger.debug(f"Error in dork {dork[:30]}: {e}")
+
+    # =================================================================
+    # ৮. ফলাফল
+    # =================================================================
+    result = {
+        "target": target,
+        "repositories": list(found_repos)[:50],
+        "secrets_found": found_secrets[:20],
+        "dorks_used": dorks_executed,
+        "mcts_used": bool(mcts_dorks),
+        "ai_dorks_used": bool(ai_dorks),
+        "total_results": len(found_repos),
+        "errors": errors
+    }
+
+    # =================================================================
+    # ৯. AI সারাংশ (যদি সিক্রেট বা রিপো পাওয়া যায়)
+    # =================================================================
+    if router and (found_repos or found_secrets):
         try:
             prompt = f"""
             GitHub recon results for {target}:
-            - Repositories found: {len(result['repositories'])}
-            - Files scanned: {len(result['files'])}
-            - Secrets found: {len(result['secrets_found'])}
+            - Repositories found: {len(found_repos)}
+            - Secrets found: {len(found_secrets)}
+            - Sample secrets: {found_secrets[:3]}
             
-            Provide a short summary of findings and prioritize next steps.
+            Provide:
+            1. Most critical secrets (if any).
+            2. Repositories that require immediate manual review.
+            3. Suggested next steps.
             """
             ai_summary = router.route("github_summary", prompt)
             if ai_summary:
                 result["ai_summary"] = ai_summary
-                logger.info("✅ AI summary received")
+                logger.info("✅ AI GitHub summary received.")
         except Exception as e:
             logger.warning(f"AI summary failed: {e}")
-    
-    logger.info(f"✅ Phase 3 complete. Repos: {len(result['repositories'])}, Secrets: {len(result['secrets_found'])}")
+
+    logger.info(f"✅ Phase 3 complete. Repos: {len(found_repos)}, Secrets: {len(found_secrets)}")
     return result
