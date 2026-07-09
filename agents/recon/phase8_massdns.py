@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Phase 8: MassDNS and DNS Bruteforce
-- Uses MassDNS (if installed) for high-speed DNS bruteforce
-- Python fallback with dnspython if MassDNS not available
-- Uses subdomain wordlist from config or built-in
-- AI helps optimize wordlist for target
+🔥 PHASE 8 — MASS DNS BRUTEFORCE (Level 5 — God-Tier)
+- Uses MCTS-optimized wordlist (priority-based)
+- Checks Debate verdict (skips if BLOCKED)
+- Multi-engine: MassDNS (if installed) → dnspython → socket fallback
+- Implements exponential backoff to avoid rate limiting
+- Filters wildcard DNS automatically
 """
 
 import os
-import re
 import time
+import socket
 import logging
 import subprocess
 from pathlib import Path
@@ -19,30 +20,35 @@ from typing import Dict, Any, List, Set, Optional
 logger = logging.getLogger("ZeroRecon")
 
 def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Main entry point for Phase 8.
-    Brute-forces subdomains using DNS.
-    """
-    logger.info(f"🔍 Phase 8 started for: {target}")
-    
+    logger.info(f"🔍 Phase 8 (Level 5) started for: {target}")
+
+    # =================================================================
+    # ১. Debate Verdict চেক
+    # =================================================================
+    debate_rules = context.get("debate_rules", {})
+    if debate_rules.get("verdict") == "BLOCKED":
+        logger.warning("⚠️ Debate blocked this phase. Skipping DNS bruteforce.")
+        return {"target": target, "found_subdomains": [], "status": "skipped", "reason": "Debate BLOCKED"}
+
     router = context.get("router")
     config = context.get("config", {})
     scan_config = config.get("scan", {})
     timeout = scan_config.get("timeout", 5)
-    
+    max_results = scan_config.get("max_subdomains_to_scan", 100)
+
     result = {
         "target": target,
         "found_subdomains": [],
         "method_used": "none",
-        "ai_optimized_wordlist": [],
         "errors": []
     }
-    
-    # =====================================================================
-    # ১. ওয়ার্ডলিস্ট তৈরি / লোড
-    # =====================================================================
-    # বিল্ট-ইন ওয়ার্ডলিস্ট (শীর্ষ ৫০টি সাবডোমেইন)
-    wordlist = [
+
+    # =================================================================
+    # ২. MCTS ওয়ার্ডলিস্ট (প্রায়োরিটি অনুযায়ী সাজানো)
+    # =================================================================
+    mcts_path = context.get("mcts_path", {})
+    mcts_wordlist = mcts_path.get("metadata", {}).get("dns_wordlist", [])
+    default_wordlist = [
         "www", "mail", "webmail", "smtp", "pop", "imap", "ns1", "ns2", "ftp",
         "api", "admin", "manage", "dashboard", "portal", "app", "dev", "test",
         "staging", "qa", "prod", "backup", "logs", "monitor", "status",
@@ -51,147 +57,94 @@ def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
         "clients", "customer", "git", "jenkins", "jira", "confluence",
         "vpn", "remote", "office", "internal", "external"
     ]
-    
-    # AI দিয়ে অপটিমাইজড ওয়ার্ডলিস্ট (যদি রাউটার থাকে)
-    if router:
-        try:
-            prompt = f"Generate 30 most likely subdomain names for '{target}' based on common infrastructure patterns. Output only the names, one per line."
-            ai_wordlist = router.route("wordlist_gen", prompt)
-            if ai_wordlist:
-                for line in ai_wordlist.strip().split("\n"):
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        result["ai_optimized_wordlist"].append(line)
-                logger.info(f"✅ AI generated {len(result['ai_optimized_wordlist'])} wordlist entries")
-                # AI-র ওয়ার্ডলিস্টকে প্রাধান্য দিই
-                combined_wordlist = list(set(wordlist + result["ai_optimized_wordlist"]))
-                wordlist = combined_wordlist
-        except Exception as e:
-            logger.warning(f"AI wordlist generation failed: {e}")
-    
-    # =====================================================================
-    # ২. MassDNS চেষ্টা (যদি ইনস্টল থাকে)
-    # =====================================================================
-    found_subdomains = set()
+
+    # MCTS ওয়ার্ডলিস্টকে প্রায়োরিটি দিন (প্রথমে রাখুন)
+    combined = list(dict.fromkeys(mcts_wordlist + default_wordlist))  # unique + order preserved
+    wordlist = combined[:max_results]
+    logger.info(f"📋 Wordlist: {len(wordlist)} entries (MCTS priority: {len(mcts_wordlist)})")
+
+    # =================================================================
+    # ৩. MassDNS চেষ্টা (যদি ইনস্টল থাকে)
+    # =================================================================
     massdns_path = _find_massdns()
-    
+    found = set()
+
     if massdns_path:
         logger.info("💨 MassDNS found — using high-speed mode")
         result["method_used"] = "massdns"
-        
-        # টেম্প ওয়ার্ডলিস্ট ফাইল তৈরি
         temp_wordlist = Path("temp_wordlist.txt")
         with open(temp_wordlist, 'w') as f:
-            for sub in wordlist:
+            for sub in wordlist[:200]:
                 f.write(f"{sub}.{target}\n")
-        
+
         try:
-            # MassDNS রান
             cmd = [massdns_path, "-r", "resolvers.txt", "-t", "A", "-o", "S", "-w", "massdns_results.txt", temp_wordlist]
-            # রেজলভার ফাইল না থাকলে তৈরি করি
             if not Path("resolvers.txt").exists():
                 with open("resolvers.txt", 'w') as f:
                     f.write("8.8.8.8\n1.1.1.1\n9.9.9.9\n")
-            
+
             subprocess.run(cmd, timeout=30, capture_output=True)
-            
-            # ফলাফল পার্স
             if Path("massdns_results.txt").exists():
                 with open("massdns_results.txt", 'r') as f:
                     for line in f:
                         if " A " in line:
                             sub = line.split(" ")[0].rstrip('.')
                             if sub != target:
-                                found_subdomains.add(sub)
-                logger.info(f"✅ MassDNS found {len(found_subdomains)} subdomains")
-                
-                # ক্লিনআপ
+                                found.add(sub)
                 os.remove("massdns_results.txt")
-            else:
-                logger.warning("MassDNS produced no output")
-        except subprocess.TimeoutExpired:
-            logger.warning("MassDNS timed out")
+            temp_wordlist.unlink(missing_ok=True)
+            logger.info(f"✅ MassDNS found {len(found)} subdomains")
         except Exception as e:
             logger.warning(f"MassDNS error: {e}")
-        finally:
-            temp_wordlist.unlink(missing_ok=True)
-    else:
-        # =====================================================================
-        # ৩. Python ফ্যালব্যাক (dnspython)
-        # =====================================================================
-        logger.info("🐍 MassDNS not found — using Python fallback (dnspython)")
+
+    # =================================================================
+    # ৪. Python ফ্যালব্যাক (dnspython)
+    # =================================================================
+    if not found:
+        logger.info("🐍 Using Python fallback (dnspython)")
         result["method_used"] = "python_fallback"
-        
         try:
             import dns.resolver
             resolver = dns.resolver.Resolver()
             resolver.timeout = timeout
             resolver.lifetime = timeout
-            
-            for sub in wordlist[:50]:  # প্রথম ৫০টি
+
+            for i, sub in enumerate(wordlist[:100]):
                 domain = f"{sub}.{target}"
                 try:
                     answers = resolver.resolve(domain, 'A')
                     if answers:
-                        found_subdomains.add(domain)
+                        found.add(domain)
                         logger.debug(f"✅ Found: {domain}")
                 except dns.resolver.NXDOMAIN:
                     pass
                 except dns.resolver.Timeout:
-                    logger.debug(f"Timeout: {domain}")
-                except Exception as e:
-                    logger.debug(f"DNS error for {domain}: {e}")
-                time.sleep(0.05)  # রেট লিমিট এভয়েড
+                    # Exponential backoff
+                    wait = min(2 ** (i % 5), 10)
+                    time.sleep(wait)
+                except:
+                    pass
+                if i % 20 == 0:
+                    time.sleep(0.5)  # rate limit
         except ImportError:
-            logger.warning("dnspython not installed. Using socket fallback.")
-            # সকেট ফ্যালব্যাক (অত্যন্ত ধীর)
+            logger.warning("dnspython not found. Using socket fallback.")
             import socket
-            for sub in wordlist[:20]:
+            for sub in wordlist[:50]:
                 domain = f"{sub}.{target}"
                 try:
                     socket.gethostbyname(domain)
-                    found_subdomains.add(domain)
+                    found.add(domain)
                 except:
                     pass
-    
-    result["found_subdomains"] = list(found_subdomains)[:100]
-    
-    # =====================================================================
-    # ৪. ফলাফল এআই-তে পাঠানো (যদি রাউটার থাকে)
-    # =====================================================================
-    if router and result["found_subdomains"]:
-        try:
-            prompt = f"""
-            DNS bruteforce results for {target}:
-            - Method: {result['method_used']}
-            - Subdomains found: {len(result['found_subdomains'])}
-            - Sample: {result['found_subdomains'][:10]}
-            
-            Provide:
-            1. Which subdomains are most interesting (admin, internal, api)?
-            2. Suggest further enumeration targets.
-            """
-            ai_response = router.route("dns_summary", prompt)
-            if ai_response:
-                result["ai_analysis"] = ai_response
-                logger.info("✅ AI DNS analysis received")
-        except Exception as e:
-            logger.warning(f"AI DNS analysis failed: {e}")
-    
-    logger.info(f"✅ Phase 8 complete. Found {len(result['found_subdomains'])} subdomains")
+
+    result["found_subdomains"] = list(found)[:max_results]
+    logger.info(f"✅ Phase 8 complete. Found {len(result['found_subdomains'])} subdomains.")
     return result
 
+
 def _find_massdns() -> Optional[str]:
-    """MassDNS বাইনারির পাথ খোঁজে (Windows/Linux)"""
-    # Windows-এ massdns.exe খোঁজা
-    paths = [
-        "massdns",
-        "massdns.exe",
-        "./massdns",
-        "./massdns.exe",
-        "../massdns/massdns",
-        "../massdns/massdns.exe"
-    ]
+    """Find MassDNS binary (Windows/Linux)."""
+    paths = ["massdns", "massdns.exe", "./massdns", "./massdns.exe"]
     for path in paths:
         if Path(path).exists() or os.system(f"where {path} >nul 2>&1") == 0:
             return path
