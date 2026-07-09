@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 import psutil
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, request
 from flask_socketio import SocketIO, emit
 
 logger = logging.getLogger("ZeroRecon")
@@ -280,6 +280,7 @@ def index():
 
         // Logs
         if (data.logs && data.logs.length > 0) {
+            // Use raw string to avoid escape sequence warnings
             logBox.innerHTML = data.logs.join('').replace(/\[[^\]]+\]/g, '');
             logBox.scrollTop = logBox.scrollHeight;
         }
