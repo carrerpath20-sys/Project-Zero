@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🔥 PHASE 1 — CERT + SUBDOMAIN ENGINE (Level 5 — God-Tier)
-- Uses MCTS-optimized wordlist (from context)
-- Checks Debate verdict before running (skips if BLOCKED)
-- 5 CT sources + ShuffleDNS logic
-- Parallel TLS fingerprinting
-- AI-filtered live subdomains
+🔥 PHASE 1 — CERT + SUBDOMAIN ENGINE (Level 5 — Robust Fallback)
+- Configurable CT sources with per-source timeout.
+- Sequential fallback: tries each source until one succeeds.
+- If all fail, skips phase gracefully.
+- MCTS-optimized wordlist integration.
+- Parallel TLS fingerprinting and live checks.
 """
 
 import re
@@ -22,21 +22,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger("ZeroRecon")
 
-# CT Sources
-CT_SOURCES = {
-    "crt.sh": "https://crt.sh/?q=%25.{target}&output=json",
-    "certspotter": "https://api.certspotter.com/v1/issuances?domain={target}&include_subdomains=true&expand=dns_names",
-    "facebook_ct": "https://graph.facebook.com/v19.0/ct?query=*.{target}&limit=100",
-    "google_ct": "https://transparencyreport.google.com/transparencyreport/api/v3/ct/ctsearch?domain={target}",
-    "cloudflare_ct": "https://crt.sh/?q={target}&output=json"
-}
+# ডিফল্ট CT সোর্স (যদি config-এ না থাকে)
+DEFAULT_SOURCES = [
+    {"name": "certspotter", "url": "https://api.certspotter.com/v1/issuances?domain={target}&include_subdomains=true&expand=dns_names", "timeout": 20},
+    {"name": "crt.sh_primary", "url": "https://crt.sh/?q={target}&output=json", "timeout": 25},
+    {"name": "crt.sh_wildcard", "url": "https://crt.sh/?q=%25.{target}&output=json", "timeout": 25},
+    {"name": "facebook_ct", "url": "https://graph.facebook.com/v19.0/ct?query=*.{target}&limit=100", "timeout": 15},
+    {"name": "google_ct", "url": "https://transparencyreport.google.com/transparencyreport/api/v3/ct/ctsearch?domain={target}", "timeout": 15}
+]
 
 def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    logger.info(f"🔍 Phase 1 (Level 5) started for: {target}")
+    logger.info(f"🔍 Phase 1 (Robust Fallback) started for: {target}")
 
-    # =================================================================
-    # ১. Debate Verdict চেক
-    # =================================================================
+    # Debate verdict check
     debate_rules = context.get("debate_rules", {})
     if debate_rules.get("verdict") == "BLOCKED":
         logger.warning("⚠️ Debate blocked this phase. Skipping to avoid WAF detection.")
@@ -53,42 +51,81 @@ def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
         "subdomains": [],
         "live_subdomains": [],
         "certificates": [],
-        "errors": []
+        "errors": [],
+        "status": "complete"
     }
 
-    # =================================================================
-    # ২. MCTS ওয়ার্ডলিস্ট (যদি পাওয়া যায়)
-    # =================================================================
+    # -----------------------------------------------------------------
+    # ১. ফ্যালব্যাক সোর্স লিস্ট তৈরি (config থেকে অথবা ডিফল্ট)
+    # -----------------------------------------------------------------
+    fallback_config = config.get("service_fallback", {})
+    sources = fallback_config.get("ct_sources", DEFAULT_SOURCES)
+    skip_on_all_fail = fallback_config.get("skip_phase_on_all_fail", True)
+
+    # -----------------------------------------------------------------
+    # ২. এমসিটিএস ওয়ার্ডলিস্ট (যদি থাকে)
+    # -----------------------------------------------------------------
     mcts_path = context.get("mcts_path", {})
     mcts_wordlist = mcts_path.get("metadata", {}).get("wordlist", [])
     if mcts_wordlist:
         logger.info(f"🧠 Using MCTS-optimized wordlist: {len(mcts_wordlist)} entries")
 
-    # =================================================================
-    # ৩. CT লগ ফেচ (প্যারালাল)
-    # =================================================================
+    # -----------------------------------------------------------------
+    # ৩. সিকোয়েনশিয়াল ফ্যালব্যাক: প্রতিটি সোর্স চেষ্টা করো
+    # -----------------------------------------------------------------
     all_subdomains: Set[str] = set()
-    logger.info(f"⏳ Fetching CT logs from {len(CT_SOURCES)} sources...")
+    success = False
 
-    with ThreadPoolExecutor(max_workers=len(CT_SOURCES)) as executor:
-        futures = {executor.submit(_fetch_ct, name, url, target, timeout): name for name, url in CT_SOURCES.items()}
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                subs = future.result(timeout=timeout)
-                if subs:
-                    all_subdomains.update(subs)
-                    logger.info(f"✅ {name} found {len(subs)} subdomains")
-            except Exception as e:
-                logger.warning(f"⚠️ {name} error: {e}")
+    for source in sources:
+        name = source.get("name", "unknown")
+        url_template = source.get("url")
+        src_timeout = source.get("timeout", timeout)
+        if not url_template:
+            continue
+
+        try:
+            url = url_template.format(target=target)
+            logger.info(f"⏳ Trying CT source: {name} (timeout: {src_timeout}s)")
+            resp = requests.get(url, timeout=src_timeout)
+            if resp.status_code != 200:
+                logger.warning(f"⚠️ {name} returned {resp.status_code}. Trying next source.")
+                continue
+
+            # পার্স করার চেষ্টা
+            data = resp.json()
+            subs = _parse_ct_response(name, data)
+            if subs:
+                all_subdomains.update(subs)
+                logger.info(f"✅ {name} found {len(subs)} subdomains")
+                success = True
+                break  # সফল হলে লুপ থেকে বেরিয়ে যাও
+            else:
+                logger.warning(f"⚠️ {name} returned empty data. Trying next source.")
+        except requests.exceptions.Timeout:
+            logger.warning(f"⏱️ {name} timed out. Trying next source.")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"⚠️ {name} request error: {e}. Trying next source.")
+        except json.JSONDecodeError:
+            logger.warning(f"⚠️ {name} returned invalid JSON. Trying next source.")
+        except Exception as e:
+            logger.warning(f"⚠️ {name} unexpected error: {e}. Trying next source.")
+
+    # যদি কোনো সোর্স সফল না হয়
+    if not success:
+        logger.error(f"❌ All CT sources failed for {target}.")
+        result["errors"].append("All CT sources failed.")
+        if skip_on_all_fail:
+            result["status"] = "skipped"
+            logger.info("⏭️ Skipping Phase 1 due to all sources failing.")
+            return result
 
     # MCTS ওয়ার্ডলিস্ট যোগ (যদি থাকে)
     if mcts_wordlist:
         all_subdomains.update(mcts_wordlist)
 
-    # =================================================================
+    # -----------------------------------------------------------------
     # ৪. TLS ফিঙ্গারপ্রিন্ট (প্যারালাল)
-    # =================================================================
+    # -----------------------------------------------------------------
     certs = []
     ports = scan_config.get("ports", [443, 8443, 465, 993])
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -102,44 +139,40 @@ def run(target: str, context: Dict[str, Any]) -> Dict[str, Any]:
                     for san in cert_info.get("san", []):
                         if san[0] == "DNS":
                             all_subdomains.add(san[1].lower())
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"TLS scan error on port {port}: {e}")
 
     result["certificates"] = certs
 
-    # =================================================================
+    # -----------------------------------------------------------------
     # ৫. লাইভ চেক (DNS + HTTP)
-    # =================================================================
+    # -----------------------------------------------------------------
     filtered = [s for s in all_subdomains if len(s) > 3 and not s.startswith("*")]
     live_subs = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_check_live, s): s for s in filtered[:200]}
-        for future in as_completed(futures):
-            s = futures[future]
-            try:
-                if future.result(timeout=5):
-                    live_subs.append(s)
-            except:
-                pass
+    if filtered:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_check_live, s): s for s in filtered[:200]}
+            for future in as_completed(futures):
+                s = futures[future]
+                try:
+                    if future.result(timeout=5):
+                        live_subs.append(s)
+                except:
+                    pass
 
     result["subdomains"] = list(all_subdomains)[:500]
     result["live_subdomains"] = live_subs[:100]
+    result["status"] = "complete"
 
     logger.info(f"✅ Phase 1 complete. Total: {len(result['subdomains'])}, Live: {len(result['live_subdomains'])}")
     return result
 
 
-def _fetch_ct(source_name: str, url_template: str, target: str, timeout: int) -> Set[str]:
-    """Fetch subdomains from a CT source."""
+def _parse_ct_response(source_name: str, data: Any) -> Set[str]:
+    """পার্স CT রেসপন্স (বিভিন্ন ফরম্যাটে) এবং সাবডোমেইন বের করে"""
     subs = set()
     try:
-        url = url_template.format(target=target)
-        resp = requests.get(url, timeout=timeout)
-        if resp.status_code != 200:
-            return subs
-        data = resp.json()
-        # Basic parsing for crt.sh-like responses
-        if source_name in ["crt.sh", "cloudflare_ct"]:
+        if source_name in ["crt.sh_primary", "crt.sh_wildcard", "crt.sh"]:
             for cert in data:
                 name = cert.get("name_value")
                 if name:
@@ -155,7 +188,7 @@ def _fetch_ct(source_name: str, url_template: str, target: str, timeout: int) ->
                     if name and not name.startswith("*"):
                         subs.add(name.lower())
         else:
-            # Generic fallback
+            # generic fallback
             items = data.get("data", data.get("results", data.get("certificates", [])))
             if isinstance(items, list):
                 for item in items:
@@ -166,11 +199,11 @@ def _fetch_ct(source_name: str, url_template: str, target: str, timeout: int) ->
                         if name and not name.startswith("*"):
                             subs.add(name.lower())
     except Exception as e:
-        logger.debug(f"{source_name} error: {e}")
+        logger.debug(f"Parsing error for {source_name}: {e}")
     return subs
 
+
 def _get_tls_fingerprint(domain: str, port: int, timeout: int) -> Optional[Dict]:
-    """Grab TLS fingerprint."""
     try:
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -192,8 +225,8 @@ def _get_tls_fingerprint(domain: str, port: int, timeout: int) -> Optional[Dict]
     except:
         return None
 
+
 def _check_live(domain: str) -> bool:
-    """Check if domain resolves."""
     try:
         socket.gethostbyname(domain)
         return True
