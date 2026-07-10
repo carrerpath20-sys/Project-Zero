@@ -32,7 +32,6 @@ class AIRouter:
     - Response validation & automatic fallback
     """
 
-    # Model context window sizes (rough estimates)
     CONTEXT_LIMITS = {
         "gpt-oss-120b": 65000,
         "gemma-4-31b": 65000,
@@ -54,35 +53,37 @@ class AIRouter:
         self.cerebras_usage_today = 0
         self.openrouter_usage_today = 0
         
-        # Performance tracking: { (provider, model): {"success": int, "fail": int, "avg_latency": float} }
         self.performance = {}
         
         self._load_keys()
         
-        # Limits
         self.cerebras_limit_rpd = config.get("ai", {}).get("cerebras", {}).get("limits", {}).get("max_rpd", 2400)
         self.cerebras_limit_rpm = config.get("ai", {}).get("cerebras", {}).get("limits", {}).get("max_rpm", 5)
         self.openrouter_limit_rpd = config.get("ai", {}).get("openrouter", {}).get("limits", {}).get("max_rpd", 50)
         
-        # Token limits for large prompts
         self.max_tokens_large = 8000
         self.max_tokens_normal = 4000
         
-        # Parallel execution for high-priority tasks
         self.parallel_tasks = ["mcts_path_gen", "debate_attacker", "debate_defender", "mutator_gen"]
         
         logger.info("🧠 AIRouter (Level 6) initialized with parallel execution & adaptive intelligence.")
 
     def _load_keys(self):
+        """কনফিগ থেকে API Keys লোড করে — একাধিক কী সাপোর্ট করে"""
         ai_config = self.config.get("ai") or {}
+        
         # Cerebras
-        c_key = ai_config.get("cerebras", {}).get("api_key")
+        cerebras_config = ai_config.get("cerebras") or {}
+        c_key = cerebras_config.get("api_key")
         if c_key and c_key != "YOUR_CEREBRAS_API_KEY":
             self.cerebras_keys.append({"key": c_key, "used_today": 0, "status": "active"})
+        
         # OpenRouter
-        o_key = ai_config.get("openrouter", {}).get("api_key")
+        openrouter_config = ai_config.get("openrouter") or {}
+        o_key = openrouter_config.get("api_key")
         if o_key and o_key != "YOUR_OPENROUTER_API_KEY":
             self.openrouter_keys.append({"key": o_key, "used_today": 0, "status": "active"})
+        
         if not self.cerebras_keys and not self.openrouter_keys:
             logger.warning("⚠️ No valid API keys found. AI features will be limited.")
 
@@ -109,13 +110,10 @@ class AIRouter:
         return len(prompt) // 4
 
     def _select_model_by_context(self, complexity: str, prompt: str) -> Tuple[str, str]:
-        """Choose provider and model based on prompt length and complexity."""
         estimated_tokens = self._estimate_tokens(prompt)
-        # For very large prompts, prefer models with large context windows
-        provider = "cerebras"  # default
-        model_key = "models"
+        provider = "cerebras"
+        model = self.config.get("ai", {}).get("cerebras", {}).get("models", {}).get(complexity, "gpt-oss-120b")
         if estimated_tokens > 60000:
-            # Use OpenRouter's large-context models if available
             fallback_models = self.config.get("ai", {}).get("openrouter", {}).get("fallback_models", {})
             if complexity == "high":
                 model = fallback_models.get("high", "nvidia/nemotron-3-super:free")
@@ -124,15 +122,9 @@ class AIRouter:
             else:
                 model = fallback_models.get("low", "google/gemma-4-26b-a4b-it:free")
             provider = "openrouter"
-        else:
-            # Use Cerebras or configured model
-            c_model = self.config.get("ai", {}).get("cerebras", {}).get("models", {}).get(complexity, "gpt-oss-120b")
-            provider = "cerebras"
-            model = c_model
         return provider, model
 
     def _call_api(self, provider: str, model: str, prompt: str, key_info: Dict, max_tokens: int) -> Optional[str]:
-        """Internal call to a specific provider with performance tracking."""
         start_time = time.time()
         result = None
         try:
@@ -143,7 +135,6 @@ class AIRouter:
         except Exception as e:
             logger.error(f"❌ {provider} call error: {e}")
         latency = time.time() - start_time
-        # Update performance stats
         key = (provider, model)
         if key not in self.performance:
             self.performance[key] = {"success": 0, "fail": 0, "avg_latency": 0.0, "count": 0}
@@ -156,21 +147,11 @@ class AIRouter:
         return result
 
     def route(self, task_type: str, prompt: str) -> Optional[str]:
-        """
-        Main routing with parallel execution for critical tasks and adaptive selection.
-        """
         complexity = self._get_complexity(task_type)
-        # Determine max_tokens
-        if task_type in ["mcts_path_gen", "debate_attacker", "debate_defender", "mutator_gen",
-                         "attack_path_generation", "executive_summary_final"]:
-            max_tokens = self.max_tokens_large
-        else:
-            max_tokens = self.max_tokens_normal
+        max_tokens = self.max_tokens_large if task_type in ["mcts_path_gen", "debate_attacker", "debate_defender", "mutator_gen", "attack_path_generation", "executive_summary_final"] else self.max_tokens_normal
 
-        # Check if we have performance data to choose best provider
         best_provider = self._get_best_provider(complexity, prompt)
         if best_provider:
-            # Try the best performing provider first
             if best_provider == "cerebras":
                 c_key = self._get_available_key(self.cerebras_keys)
                 if c_key:
@@ -188,26 +169,21 @@ class AIRouter:
                     if result is not None:
                         return result
 
-        # If best provider failed or not available, try parallel execution for critical tasks
         if task_type in self.parallel_tasks:
             return self._parallel_route(complexity, prompt, max_tokens)
         else:
-            # Sequential fallback
             return self._sequential_route(complexity, prompt, max_tokens)
 
     def _get_best_provider(self, complexity: str, prompt: str) -> Optional[str]:
-        """Determine which provider has the highest success rate for this complexity."""
-        # Count successes for each provider
         stats = {"cerebras": {"success": 0, "total": 0}, "openrouter": {"success": 0, "total": 0}}
         for (provider, model), perf in self.performance.items():
             if provider in stats:
                 stats[provider]["success"] += perf["success"]
                 stats[provider]["total"] += perf["success"] + perf["fail"]
-        # Choose provider with highest success rate, if any data
         best = None
         best_rate = -1
         for provider, s in stats.items():
-            if s["total"] > 5:  # only if enough data
+            if s["total"] > 5:
                 rate = s["success"] / s["total"]
                 if rate > best_rate:
                     best_rate = rate
@@ -215,25 +191,18 @@ class AIRouter:
         return best
 
     def _parallel_route(self, complexity: str, prompt: str, max_tokens: int) -> Optional[str]:
-        """
-        Send parallel requests to both Cerebras and OpenRouter, return first successful.
-        """
-        results = []
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = []
-            # Cerebras
             c_key = self._get_available_key(self.cerebras_keys)
             if c_key:
                 c_model = self.config.get("ai", {}).get("cerebras", {}).get("models", {}).get(complexity, "gpt-oss-120b")
                 futures.append(executor.submit(self._call_api, "cerebras", c_model, prompt, c_key, max_tokens))
-            # OpenRouter
             o_key = self._get_available_key(self.openrouter_keys)
             if o_key:
                 o_model = self.config.get("ai", {}).get("openrouter", {}).get("fallback_models", {}).get(complexity)
                 if not o_model:
                     o_model = self._get_default_fallback_model(complexity)
                 futures.append(executor.submit(self._call_api, "openrouter", o_model, prompt, o_key, max_tokens))
-            # Wait for first successful
             for future in as_completed(futures):
                 try:
                     result = future.result(timeout=30)
@@ -241,12 +210,9 @@ class AIRouter:
                         return result
                 except Exception as e:
                     logger.debug(f"Parallel request error: {e}")
-        # If all failed, fallback to sequential
         return self._sequential_route(complexity, prompt, max_tokens)
 
     def _sequential_route(self, complexity: str, prompt: str, max_tokens: int) -> Optional[str]:
-        """Traditional sequential fallback with adaptive downgrade."""
-        # Try Cerebras
         c_key = self._get_available_key(self.cerebras_keys)
         if c_key:
             c_model = self.config.get("ai", {}).get("cerebras", {}).get("models", {}).get(complexity, "gpt-oss-120b")
@@ -254,16 +220,12 @@ class AIRouter:
             if result is not None:
                 return result
             logger.info("🔄 Cerebras failed, trying OpenRouter fallback...")
-        # Try OpenRouter
         o_key = self._get_available_key(self.openrouter_keys)
         if o_key:
-            # Try to get model from config, fallback to default
             o_model = self.config.get("ai", {}).get("openrouter", {}).get("fallback_models", {}).get(complexity)
             if not o_model:
                 o_model = self._get_default_fallback_model(complexity)
-            # If still None, try downgrading complexity
             if not o_model:
-                # Try downgrading to medium/low
                 if complexity == "high":
                     o_model = self.config.get("ai", {}).get("openrouter", {}).get("fallback_models", {}).get("medium")
                 if not o_model and complexity != "low":
@@ -276,7 +238,6 @@ class AIRouter:
         return None
 
     def _get_default_fallback_model(self, complexity: str) -> str:
-        """Return default OpenRouter free model for complexity."""
         if complexity == "high":
             return "nvidia/nemotron-3-ultra:free"
         elif complexity == "medium":
@@ -284,9 +245,7 @@ class AIRouter:
         else:
             return "google/gemma-4-26b-a4b-it:free"
 
-    # ---------- Existing provider call methods (unchanged but updated with retry) ----------
     def _call_cerebras(self, model: str, prompt: str, key_info: Dict, max_tokens: int) -> Optional[str]:
-        """Call Cerebras with exponential backoff + jitter."""
         base_delay = 12
         for attempt in range(3):
             now = time.time()
@@ -320,12 +279,10 @@ class AIRouter:
                     logger.error(f"❌ Cerebras error {resp.status_code}: {resp.text[:100]}")
             except Exception as e:
                 logger.error(f"❌ Cerebras connection error: {e}")
-            # Exponential backoff with jitter
             time.sleep((2 ** attempt) + random.uniform(0, 1))
         return None
 
     def _call_openrouter(self, model: str, prompt: str, key_info: Dict, max_tokens: int) -> Optional[str]:
-        """Call OpenRouter with retry and error handling."""
         if self.openrouter_usage_today >= self.openrouter_limit_rpd:
             logger.warning("⚠️ OpenRouter daily limit reached.")
             return None
@@ -348,13 +305,11 @@ class AIRouter:
                     else:
                         logger.warning("⚠️ Empty response from OpenRouter.")
                 elif resp.status_code == 400:
-                    # Check error message
                     try:
                         err_data = resp.json()
                         err_msg = err_data.get("error", {}).get("message", "")
                         if "model" in err_msg.lower() or "not a valid model" in err_msg.lower():
                             logger.warning(f"⚠️ OpenRouter model invalid: {model}. Trying fallback.")
-                            # Try to fallback to default model
                             if ":" in model:
                                 base_model = model.split(":")[0]
                                 new_model = base_model + ":free" if not base_model.endswith(":free") else model
@@ -364,7 +319,6 @@ class AIRouter:
                                 logger.info(f"🔄 Retrying with {new_model}")
                                 return self._call_openrouter(new_model, prompt, key_info, max_tokens)
                             else:
-                                # Try the default generic
                                 default = "openai/gpt-oss-120b:free"
                                 if default != model:
                                     return self._call_openrouter(default, prompt, key_info, max_tokens)
