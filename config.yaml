@@ -29,17 +29,22 @@ ai:
     retry_delay: 60
 
   openrouter:
-    enabled: true
-    api_key: "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"
-    base_url: "https://openrouter.ai/api/v1/chat/completions"
-    fallback_models:
-      high: "nvidia/nemotron-3-ultra"
-      medium: "poolside/laguna-m.1"
-      low: "openai/gpt-oss-20b"
-    limits:
-      max_rpd: 50
-    timeout: 30
-    retry_on_402: true
+  enabled: true
+  api_key: "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"
+  base_url: "https://openrouter.ai/api/v1/chat/completions"
+  fallback_models:
+    # 🔥 High: জটিল রিজনিং, MCTS, Debate, Supervisor ডিসিশন
+    high: "nvidia/nemotron-3-ultra:free"
+    
+    # ⚡ Medium: ব্যালেন্সড রিকন, এক্সিকিউটর, ম্যাপার
+    medium: "openai/gpt-oss-120b:free"
+    
+    # 🪶 Low: দ্রুত ভ্যালিডেশন, ফরম্যাটিং, ছোটখাটো চেক
+    low: "google/gemma-4-26b-a4b-it:free"
+  limits:
+    max_rpd: 50
+  timeout: 30
+  retry_on_402: true
 
 # ------------------------------------------------------------
 #  ☁️ ChromaDB Cloud Configuration (for DNA Engine)
