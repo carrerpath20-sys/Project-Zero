@@ -18,33 +18,28 @@ ai:
     api_key: "csk-j8vjk2e46ww2xn3txkrc6fyc365mjrxc4c5w5xjwrw59fwtf"
     base_url: "https://api.cerebras.ai/v1/chat/completions"
     models:
-      high: "gpt-oss-120b"          # জটিল রিজনিং (সুপারভাইজার, হিলার)
-      medium: "gemma-4-31b"         # ব্যালেন্সড (এক্সিকিউটর, ম্যাপার)
-      low: "zai-glm-4.7"            # দ্রুত (ভ্যালিডেটর, ফরম্যাটিং)
+      high: "gpt-oss-120b"
+      medium: "gemma-4-31b"
+      low: "zai-glm-4.7"
     limits:
-      max_rpm: 5                    # প্রতি মিনিটে ৫টি রিকোয়েস্ট
-      max_rpd: 2400                 # প্রতিদিন ২৪০০টি রিকোয়েস্ট
+      max_rpm: 5
+      max_rpd: 2400
     timeout: 45
     retry_on_429: true
     retry_delay: 60
 
   openrouter:
-  enabled: true
-  api_key: "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"
-  base_url: "https://openrouter.ai/api/v1/chat/completions"
-  fallback_models:
-    # 🔥 High: জটিল রিজনিং, MCTS, Debate, Supervisor ডিসিশন
-    high: "nvidia/nemotron-3-ultra:free"
-    
-    # ⚡ Medium: ব্যালেন্সড রিকন, এক্সিকিউটর, ম্যাপার
-    medium: "openai/gpt-oss-120b:free"
-    
-    # 🪶 Low: দ্রুত ভ্যালিডেশন, ফরম্যাটিং, ছোটখাটো চেক
-    low: "google/gemma-4-26b-a4b-it:free"
-  limits:
-    max_rpd: 50
-  timeout: 30
-  retry_on_402: true
+    enabled: true
+    api_key: "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"
+    base_url: "https://openrouter.ai/api/v1/chat/completions"
+    fallback_models:
+      high: "nvidia/nemotron-3-ultra:free"
+      medium: "openai/gpt-oss-120b:free"
+      low: "google/gemma-4-26b-a4b-it:free"
+    limits:
+      max_rpd: 50
+    timeout: 30
+    retry_on_402: true
 
 # ------------------------------------------------------------
 #  ☁️ ChromaDB Cloud Configuration (for DNA Engine)
@@ -61,44 +56,44 @@ chromadb:
 # ------------------------------------------------------------
 evo:
   mcts:
-    enabled: false                 # --god-mode দিলে true হবে
+    enabled: false
     max_paths: 3
     confidence_threshold: 0.6
     simulate_rounds: 5
 
   neuro_symbolic:
-    enabled: false                 # --god-mode দিলে true হবে
+    enabled: false
     max_depth: 5
     use_esprima: true
 
   adversarial_debate:
-    enabled: false                 # --aggressive-debate দিলে true হবে
+    enabled: false
     rounds: 3
     temperature: 0.5
     parallel: true
 
   mutator:
-    enabled: false                 # --god-mode দিলে true হবে
+    enabled: false
     max_rules: 3
 
   reflector:
-    enabled: false                 # --god-mode দিলে true হবে
+    enabled: false
     dna_update_threshold: 0.7
 
   profiler:
-    enabled: true                  # সবসময় চালু (হালকা)
+    enabled: true
     deterministic: true
-    semantic: false                # SBERT ব্যবহার করবে? (ভারী)
+    semantic: false
 
 # ------------------------------------------------------------
 #  🕵️ স্ক্যানিং প্যারামিটার (প্যাশেন্ট + অ্যাগ্রেসিভ)
 # ------------------------------------------------------------
 scan:
-  timeout: 180                     # প্রতিটি HTTP/DNS রিকোয়েস্টে ৩ মিনিট
-  retries: 20
-  max_wait_minutes: 15
+  timeout: 60                     # ৩ মিনিট → ৬০ সেকেন্ড (দ্রুত ফেল করতে)
+  retries: 3                      # ২০ → ৩ (বারবার চেষ্টা না করে)
+  max_wait_minutes: 5             # ১৫ → ৫ (প্রতি ফেজের জন্য)
   delay_between_requests: 8.0
-  max_threads: 1                   # রেট লিমিটের জন্য ১
+  max_threads: 2                  # ১ → ২ (Pro Mode-এর জন্য দ্রুত)
   jitter: true
   jitter_min: 6
   jitter_max: 12
@@ -121,6 +116,30 @@ scan:
     - 6379
     - 27017
   max_subdomains_to_scan: 500
+
+# ------------------------------------------------------------
+#  🔄 সার্ভিস ফ্যালব্যাক কনফিগ (NEW)
+# ------------------------------------------------------------
+service_fallback:
+  enabled: true
+  skip_phase_on_all_fail: true    # সব সোর্স ব্যর্থ হলে ফেজ স্কিপ করবে
+  ct_sources:
+    - name: "certspotter"
+      url: "https://api.certspotter.com/v1/issuances?domain={target}&include_subdomains=true&expand=dns_names"
+      timeout: 20
+    - name: "crt.sh_primary"
+      url: "https://crt.sh/?q={target}&output=json"
+      timeout: 30
+    - name: "crt.sh_wildcard"
+      url: "https://crt.sh/?q=%25.{target}&output=json"
+      timeout: 30
+    - name: "facebook_ct"
+      url: "https://graph.facebook.com/v19.0/ct?query=*.{target}&limit=100"
+      timeout: 15
+    - name: "google_ct"
+      url: "https://transparencyreport.google.com/transparencyreport/api/v3/ct/ctsearch?domain={target}"
+      timeout: 15
+    # cloudflare_ct আসলে crt.sh-ই, তাই বাদ দিলাম (ডুপ্লিকেট)
 
 # ------------------------------------------------------------
 #  🛡️ OPSEC ও স্টেলথ সেটিংস
@@ -207,19 +226,19 @@ phases:
     - 15
   skip: []
   custom_timeouts:
-    1: 300
-    4: 300
-    8: 120
+    1: 60      # Phase 1-এর জন্য আলাদা টাইমআউট (ফ্যালব্যাক ব্যবহার করবে)
+    4: 120
+    8: 60
 
 # ------------------------------------------------------------
 #  🔥 ড্যাশবোর্ড সেটিংস
 # ------------------------------------------------------------
 dashboard:
-  enabled: false                   # --dashboard ফ্ল্যাগ দিলে true হবে
+  enabled: false
   host: "0.0.0.0"
   port: 5000
   debug: false
-  refresh_interval: 2              # সেকেন্ড
+  refresh_interval: 2
 
 # ------------------------------------------------------------
 #  🆕 এক্সট্রা ফিচার (Level 5)
@@ -229,29 +248,24 @@ extra_features:
     enabled: true
     max_predictions: 50
     pattern_learning: true
-
   smart_port_scan:
     enabled: true
     skip_cloudflare_edges: true
     scan_origins_only: true
-
   diff_scan:
     enabled: true
     snapshot_interval_hours: 24
     alert_on_change: true
-
   metadata_harvester:
     enabled: true
     max_file_size_mb: 5
     extract_author: true
     extract_software: true
-
   supply_chain_detection:
     enabled: true
     check_cname: true
     check_txt: true
     dangling_timeout: 30
-
   self_healing:
     enabled: true
     max_healing_attempts: 3
