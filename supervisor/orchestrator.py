@@ -3,7 +3,7 @@
 """
 🔥 SUPERVISOR ORCHESTRATOR (Level 5 — God-Tier Evo Integration)
 - Dynamic Phase Discovery: scans agents/recon/ for phase*.py files.
-- Uses MCTS, Mutator, Debate, Reflector, DNA.
+- Conditionally loads MCTS, Mutator, Debate based on config.
 - Handles missing phases gracefully.
 """
 
@@ -69,12 +69,38 @@ class SupervisorOrchestrator:
         self.health_monitor = HealthMonitor()
 
         # ================================================================
-        # 🧬 EVO ENGINES (Level 5)
+        # 🧬 EVO ENGINES (Level 5) — Conditionally loaded based on config
         # ================================================================
+        evo_config = config.get("evo", {})
+
+        # DNA always needed (for Reflector & Profiler)
         self.dna = DNA(state_dir=self.state_dir / "dna")
-        self.mcts = MCTS(config, self.dna, self.router)
-        self.mutator = Mutator(config, self.dna, self.router)
-        self.debate = DebateEngine(config, self.router)
+
+        # MCTS
+        if evo_config.get("mcts", {}).get("enabled", False):
+            self.mcts = MCTS(config, self.dna, self.router)
+            logger.info("🧠 MCTS engine enabled.")
+        else:
+            self.mcts = None
+            logger.info("⏭️ MCTS disabled (config: evo.mcts.enabled=false)")
+
+        # Mutator
+        if evo_config.get("mutator", {}).get("enabled", False):
+            self.mutator = Mutator(config, self.dna, self.router)
+            logger.info("🧬 Mutator engine enabled.")
+        else:
+            self.mutator = None
+            logger.info("⏭️ Mutator disabled (config: evo.mutator.enabled=false)")
+
+        # Debate
+        if evo_config.get("adversarial_debate", {}).get("enabled", False):
+            self.debate = DebateEngine(config, self.router)
+            logger.info("⚖️ Debate engine enabled.")
+        else:
+            self.debate = None
+            logger.info("⏭️ Debate disabled (config: evo.adversarial_debate.enabled=false)")
+
+        # Reflector always loaded (but only updates DNA if enabled)
         self.reflector = Reflector(config, self.dna)
 
         # State
@@ -144,7 +170,7 @@ class SupervisorOrchestrator:
             self._load_checkpoint(self.resume_session)
 
         # ================================================================
-        # 🧠 PHASE 0: MCTS Search & Path Planning
+        # 🧠 PHASE 0: MCTS Search & Path Planning (conditional)
         # ================================================================
         passive_data = {
             "target": self.target,
@@ -152,24 +178,32 @@ class SupervisorOrchestrator:
             "timestamp": datetime.now().isoformat()
         }
 
-        logger.info("🧠 Running MCTS search for optimal reconnaissance path...")
-        self.mcts_result = self.mcts.search(self.target, passive_data)
-        logger.info(f"✅ MCTS selected: {self.mcts_result.get('selected')} (confidence: {self.mcts_result.get('confidence', 0):.2f})")
+        if self.mcts:
+            logger.info("🧠 Running MCTS search for optimal reconnaissance path...")
+            self.mcts_result = self.mcts.search(self.target, passive_data)
+            logger.info(f"✅ MCTS selected: {self.mcts_result.get('selected')} (confidence: {self.mcts_result.get('confidence', 0):.2f})")
+        else:
+            self.mcts_result = {"selected": "Default (MCTS disabled)", "confidence": 0.5, "metadata": {}}
+            logger.info("⏭️ MCTS skipped (disabled in config)")
 
         # ================================================================
-        # 🧬 PHASE 0.5: Mutator — Generate Custom Rules
+        # 🧬 PHASE 0.5: Mutator — Generate Custom Rules (conditional)
         # ================================================================
-        mutator_rules = self.mutator.generate_rules(
-            self.target,
-            self.mcts_result,
-            passive_data
-        )
-        logger.info(f"🧬 Mutator generated {mutator_rules.get('count', 0)} custom rules.")
+        if self.mutator:
+            mutator_rules = self.mutator.generate_rules(
+                self.target,
+                self.mcts_result,
+                passive_data
+            )
+            logger.info(f"🧬 Mutator generated {mutator_rules.get('count', 0)} custom rules.")
+        else:
+            mutator_rules = {"rules": [], "count": 0}
+            logger.info("⏭️ Mutator skipped (disabled in config)")
 
         # ================================================================
-        # ⚖️ PHASE 0.6: Debate — Validate Rules
+        # ⚖️ PHASE 0.6: Debate — Validate Rules (conditional)
         # ================================================================
-        if mutator_rules.get("rules"):
+        if mutator_rules.get("rules") and self.debate:
             debate_result = self.debate.run_debate(self.target, mutator_rules.get("rules", []))
             self.debate_rules = {
                 "verdict": debate_result.get("verdict", "APPROVED"),
@@ -178,6 +212,8 @@ class SupervisorOrchestrator:
             logger.info(f"⚖️ Debate verdict: {self.debate_rules['verdict']}")
         else:
             self.debate_rules = {"verdict": "APPROVED", "flaws": []}
+            if mutator_rules.get("rules") and not self.debate:
+                logger.info("⏭️ Debate skipped (disabled in config)")
 
         # ================================================================
         # 🚀 EXECUTION: Discover phases and run them
@@ -265,7 +301,7 @@ class SupervisorOrchestrator:
                     self.target,
                     self.mcts_result,
                     {"target": self.target}
-                )
+                ) if self.mutator else {"rules": [], "count": 0}
             }
 
             result = run_func(self.target, phase_context)
