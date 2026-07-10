@@ -2,14 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 🔥 SUPERVISOR ORCHESTRATOR (Level 5 — God-Tier Evo Integration)
-- Initializes DNA, MCTS, Mutator, Debate, and Reflector engines.
-- Runs MCTS search to find the best reconnaissance path.
-- Passes MCTS result, Debate verdict, and DNA to the Executor.
-- After all phases, runs Reflector to update DNA with learnings.
-- Integrates health monitor and checkpoint system.
+- Dynamic Phase Discovery: scans agents/recon/ for phase*.py files.
+- Uses MCTS, Mutator, Debate, Reflector, DNA.
+- Handles missing phases gracefully.
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -86,6 +85,9 @@ class SupervisorOrchestrator:
         self.debate_rules = {"verdict": "APPROVED", "flaws": []}
         self.checkpoint_file = self.checkpoint_dir / f"session_{self.target}_{datetime.now().strftime('%Y%m%d')}.json"
 
+        # 🔥 Dynamic phase discovery cache
+        self._phase_map = None
+
         logger.info(f"🦅 SupervisorOrchestrator (Level 5) initialized for: {target}")
 
     def _parse_phases(self, phases_str: Optional[str]) -> List[int]:
@@ -96,6 +98,36 @@ class SupervisorOrchestrator:
         except:
             logger.warning("⚠️ Invalid --phases format. Running all phases.")
             return list(range(1, 16))
+
+    def _discover_phases(self) -> Dict[int, str]:
+        """
+        Dynamically scan agents/recon/ directory to discover phase files.
+        Returns: {1: "phase1_cert_subdomain", 2: "phase2_asn", ...}
+        """
+        if self._phase_map is not None:
+            return self._phase_map
+
+        phase_map = {}
+        recon_dir = Path(__file__).parent.parent / "agents" / "recon"
+        
+        if not recon_dir.exists():
+            logger.error("❌ Recon directory not found!")
+            return {}
+
+        for py_file in recon_dir.glob("phase*.py"):
+            filename = py_file.stem  # phase1_cert_subdomain
+            match = re.match(r'phase(\d+)', filename)
+            if match:
+                phase_num = int(match.group(1))
+                phase_map[phase_num] = filename
+
+        if not phase_map:
+            logger.warning("⚠️ No phase files found in agents/recon/. Check your installation.")
+        else:
+            logger.info(f"🔍 Discovered {len(phase_map)} phases: {sorted(phase_map.keys())}")
+
+        self._phase_map = phase_map
+        return phase_map
 
     def run(self) -> Dict[str, Any]:
         """Main execution — ARTEMIS-style loop with Evo intelligence."""
@@ -114,7 +146,6 @@ class SupervisorOrchestrator:
         # ================================================================
         # 🧠 PHASE 0: MCTS Search & Path Planning
         # ================================================================
-        # Gather basic passive data for MCTS
         passive_data = {
             "target": self.target,
             "domain": self.target,
@@ -149,14 +180,33 @@ class SupervisorOrchestrator:
             self.debate_rules = {"verdict": "APPROVED", "flaws": []}
 
         # ================================================================
-        # 🚀 EXECUTION: Run all phases with Evo context
+        # 🚀 EXECUTION: Discover phases and run them
         # ================================================================
-        for phase_num in self.phases_to_run:
+        phase_map = self._discover_phases()
+        if not phase_map:
+            logger.error("❌ No phases discovered. Skipping execution.")
+            return {}
+
+        # Determine which phases to run (filter by --phases)
+        phases_to_run = []
+        for p in self.phases_to_run:
+            if p in phase_map:
+                phases_to_run.append(p)
+            else:
+                logger.warning(f"⚠️ Phase {p} not found in discovered phases. Skipping.")
+
+        if not phases_to_run:
+            logger.error("❌ No valid phases to run. Aborting.")
+            return {}
+
+        logger.info(f"🚀 Running phases: {phases_to_run}")
+
+        for phase_num in phases_to_run:
             self.current_phase = phase_num
             logger.info(f"📡 Phase {phase_num} started")
 
             try:
-                phase_result = self._run_phase(phase_num)
+                phase_result = self._run_phase(phase_num, phase_map[phase_num])
                 self.results[f"phase_{phase_num}"] = phase_result
                 self._save_checkpoint()
 
@@ -180,7 +230,6 @@ class SupervisorOrchestrator:
             self.results,
             self.mcts_result
         )
-        # ✅ FIX: Check if insights is a non-empty list before indexing
         insights = reflection.get('insights', ['No insights'])
         if insights and isinstance(insights, list) and len(insights) > 0:
             logger.info(f"✅ Reflector: {insights[0]}")
@@ -197,9 +246,9 @@ class SupervisorOrchestrator:
         logger.info(f"✅ Mission completed in {(datetime.now() - self.start_time).total_seconds():.2f}s")
         return report
 
-    def _run_phase(self, phase_num: int) -> Dict[str, Any]:
+    def _run_phase(self, phase_num: int, phase_name: str) -> Dict[str, Any]:
         """Run a single phase with full Evo context."""
-        phase_module = f"agents.recon.phase{phase_num}"
+        phase_module = f"agents.recon.{phase_name}"
         try:
             module = __import__(phase_module, fromlist=["run"])
             run_func = getattr(module, "run")
@@ -224,7 +273,7 @@ class SupervisorOrchestrator:
 
         except ImportError as e:
             logger.warning(f"⚠️ Phase {phase_num} module not found: {e}")
-            return {"error": f"Module not found: {e}", "skipped": True}
+            return {"error": f"Module not found: {phase_name}", "skipped": True}
         except Exception as e:
             logger.error(f"❌ Phase {phase_num} execution error: {e}")
             return {"error": str(e)}
