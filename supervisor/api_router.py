@@ -48,16 +48,20 @@ class AIRouter:
     
     def _load_keys(self):
         """কনফিগ থেকে API Keys লোড করে — একাধিক কী সাপোর্ট করে"""
+        # 🔥 FIX: Ensure ai_config is always a dict
+        ai_config = self.config.get("ai") or {}
+        
         # Cerebras
-        c_key = self.config.get("ai", {}).get("cerebras", {}).get("api_key")
+        c_key = ai_config.get("cerebras", {}).get("api_key")
         if c_key and c_key != "YOUR_CEREBRAS_API_KEY":
             self.cerebras_keys.append({
                 "key": c_key,
                 "used_today": 0,
                 "status": "active"
             })
+        
         # OpenRouter
-        o_key = self.config.get("ai", {}).get("openrouter", {}).get("api_key")
+        o_key = ai_config.get("openrouter", {}).get("api_key")
         if o_key and o_key != "YOUR_OPENROUTER_API_KEY":
             self.openrouter_keys.append({
                 "key": o_key,
@@ -197,7 +201,19 @@ class AIRouter:
         # ২. OpenRouter (Fallback) চেষ্টা
         o_key = self._get_available_key(self.openrouter_keys)
         if o_key:
-            o_model = self.config.get("ai", {}).get("openrouter", {}).get("fallback_models", {}).get(complexity, "nvidia/nemotron-3-ultra")
+            # 🔥 Use :free suffix if not already present in config
+            o_model = self.config.get("ai", {}).get("openrouter", {}).get("fallback_models", {}).get(complexity)
+            if not o_model:
+                if complexity == "high":
+                    o_model = "nvidia/nemotron-3-ultra:free"
+                elif complexity == "medium":
+                    o_model = "openai/gpt-oss-120b:free"
+                else:
+                    o_model = "google/gemma-4-26b-a4b-it:free"
+            # Ensure :free is present
+            if not o_model.endswith(":free"):
+                o_model = o_model + ":free"
+            
             logger.debug(f"🔄 Fallback to OpenRouter [{o_model}]")
             result = self._call_openrouter(o_model, prompt, o_key, max_tokens)
             if result is not None:
