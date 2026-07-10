@@ -180,7 +180,12 @@ class SupervisorOrchestrator:
             self.results,
             self.mcts_result
         )
-        logger.info(f"✅ Reflector: {reflection.get('insights', ['No insights'])[0]}")
+        # ✅ FIX: Check if insights is a non-empty list before indexing
+        insights = reflection.get('insights', ['No insights'])
+        if insights and isinstance(insights, list) and len(insights) > 0:
+            logger.info(f"✅ Reflector: {insights[0]}")
+        else:
+            logger.info("✅ Reflector: No insights to report.")
 
         # ================================================================
         # 📊 REPORT: Generate final report
