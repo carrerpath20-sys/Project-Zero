@@ -112,7 +112,7 @@ python main.py target.com --resume <session_id>
 ```cmd
 python main.py target.com --verbose
 ```
-
+@@@ প্রফেশনাল কম্বো: python main.py target.com --phases 1,2,4,8,10,12 --verbose
 ---
 
 ### 📋 **৬. কমান্ড-লাইন আর্গুমেন্টের তালিকা**
